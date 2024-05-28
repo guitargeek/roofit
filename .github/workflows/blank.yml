@@ -1,0 +1,63 @@
+# This is a basic workflow to help you get started with Actions
+
+name: CI
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env:
+  DAY_OF_WEEK: Monday
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 30
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v4
+
+      # Runs a single command using the runners shell
+      - name: Prepare environment
+        run: |
+          sudo apt update
+          sudo apt -y install libgmock-dev libgsl-dev libgtest-dev libtbb-dev nlohmann-json3-dev
+
+      # Runs a set of commands using the runners shell
+      - name: Download ROOT
+        run: |
+          BINARY_NAME=root_v6.36.00.ubuntu24.04.no-roofit.RelWithDebInfo
+          wget -q https://rembserj.web.cern.ch/rembserj/data/binaries/$BINARY_NAME.tar.gz
+          tar -xf $BINARY_NAME.tar.gz
+      - name: Compile RooFit
+        run: |
+          source root/bin/thisroot.sh
+          mkdir build
+          cd build
+          cmake -Dtesting=ON -Dmathmore=ON -DCMAKE_INSTALL_PREFIX=../install -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+          cmake --build . --target install -j2
+
+      - name: Test Project
+        run: |
+          source root/bin/thisroot.sh
+          export ROOT_INCLUDE_PATH=$PWD/install/include
+          export LD_LIBRARY_PATH=$PWD/install/lib:$LD_LIBRARY_PATH
+          cd build
+          ctest . -j2 --output-on-failure
+        #uses: threeal/ctest-action@v1.0.0
+        #with:
+          #test-dir: build
+          #argsr: -j2
