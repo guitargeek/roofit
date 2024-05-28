@@ -1,0 +1,130 @@
+# Copyright (C) 1995-2019, Rene Brun and Fons Rademakers.
+# All rights reserved.
+#
+# For the licensing terms see $ROOTSYS/LICENSE.
+# For the list of contributors see $ROOTSYS/README/CREDITS.
+
+# @author Danilo Piparo CERN, 2018
+# @author Patrick Bos, NL eScience Center, 2018
+
+if(NOT MSVC OR win_broken_tests)
+  # Disabled on Windows because it causes the following error:
+  # unknown file: error: SEH exception with code 0xc0000005 thrown in the test body.
+  # According to the internet, this has to do with gtest, so it's not a RooFit problem
+  set(extra_sources testRooRealIntegral.cxx)
+endif()
+
+# This test bundles together the tests that only depend on RooFitCore and no
+# other RooFit libraries. This drastically reduced linking time and runtime.
+ROOT_ADD_GTEST(testRooFitCore
+    TestStatistics/testInterface.cxx
+    TestStatistics/testLikelihoodSerial.cxx
+    TestStatistics/testRooAbsL.cxx
+    TestStatistics/testRooRealL.cxx
+    loadOldWorkspace.cxx
+    testGenericPdf.cxx
+    testGlobalObservables.cxx
+    testRooAbsCollection.cxx
+    testRooBinSamplingPdf.cxx
+    testRooCacheManager.cxx
+    testRooCategory.cxx
+    testRooCollectionProxy.cxx
+    testRooCurve.cxx
+    testRooDataHist.cxx
+    testRooHist.cxx
+    testRooHistPdf.cxx
+    testRooLinkedList.cxx
+    testRooPolyFunc.cxx
+    testRooProdPdf.cxx
+    testRooSTLRefCountList.cxx
+    testRooWrapperPdf.cxx
+    testSimple.cxx
+    testSumW2Error.cxx
+    testTestStatistics.cxx
+    ${extra_sources}
+  LIBRARIES
+    Gpad
+    RooFitCore
+  COPY_TO_BUILDDIR
+    # For testRooCollectionProxy.cxx
+    ${CMAKE_CURRENT_SOURCE_DIR}/testRooCollectionProxy_v626.root
+    # For testRooDataHist.cxx
+    ${CMAKE_CURRENT_SOURCE_DIR}/dataHistv4_ref.root
+    ${CMAKE_CURRENT_SOURCE_DIR}/dataHistv5_ref.root
+    ${CMAKE_CURRENT_SOURCE_DIR}/dataHistv6_ref.root
+    # For loadOldWorkspace.cxx
+    ${CMAKE_CURRENT_SOURCE_DIR}/data/rf502_workspace_v5.34.root
+    ${CMAKE_CURRENT_SOURCE_DIR}/data/rf502_workspace_v6.04.root
+    ${CMAKE_CURRENT_SOURCE_DIR}/data/rf502_workspace_v6.14.root
+)
+
+ROOT_ADD_GTEST(testRooAddPdf testRooAddPdf.cxx LIBRARIES RooFitCore RooFit RooStats)
+ROOT_ADD_GTEST(testRooAbsPdf testRooAbsPdf.cxx LIBRARIES RooFitCore RooFit)
+
+ROOT_ADD_GTEST(testRooDataSet testRooDataSet.cxx LIBRARIES Tree RooFitCore
+  COPY_TO_BUILDDIR ${CMAKE_CURRENT_SOURCE_DIR}/dataSet_with_errors_6_26_10.root)
+ROOT_ADD_GTEST(testRooFormula testRooFormula.cxx LIBRARIES RooFitCore ROOT::TestSupport)
+ROOT_ADD_GTEST(testProxiesAndCategories testProxiesAndCategories.cxx
+  LIBRARIES RooFitCore
+  COPY_TO_BUILDDIR ${CMAKE_CURRENT_SOURCE_DIR}/testProxiesAndCategories_1.root
+                   ${CMAKE_CURRENT_SOURCE_DIR}/categories_v620.root
+                   ${CMAKE_CURRENT_SOURCE_DIR}/categories_v621.root
+                   ${CMAKE_CURRENT_SOURCE_DIR}/categories_v622.root
+                   ${CMAKE_CURRENT_SOURCE_DIR}/categories_v624.root)
+ROOT_ADD_GTEST(testRooRealVar testRooRealVar.cxx LIBRARIES RooFitCore
+  COPY_TO_BUILDDIR ${CMAKE_CURRENT_SOURCE_DIR}/testRooRealVar_data1.root)
+
+  ROOT_ADD_GTEST(testRooAbsReal testRooAbsReal.cxx
+    LIBRARIES RooFit RooFitCore
+    COPY_TO_BUILDDIR ${CMAKE_CURRENT_SOURCE_DIR}/testRooAbsReal_1.root ${CMAKE_CURRENT_SOURCE_DIR}/testRooAbsReal_2.root)
+if(clad)
+  ROOT_ADD_GTEST(testRooFuncWrapper testRooFuncWrapper.cxx LIBRARIES RooFitCore RooFit HistFactory)
+endif()
+ROOT_ADD_GTEST(testNaNPacker testNaNPacker.cxx LIBRARIES RooFitCore)
+ROOT_ADD_GTEST(testRooExtendedBinding testRooExtendedBinding.cxx LIBRARIES RooFitCore RooFit)
+ROOT_ADD_GTEST(testRooMinimizer testRooMinimizer.cxx LIBRARIES RooFitCore RooFit)
+ROOT_ADD_GTEST(testRooMulti testRooMulti.cxx LIBRARIES RooFitCore RooFit)
+ROOT_ADD_GTEST(testRooRombergIntegrator testRooRombergIntegrator.cxx LIBRARIES MathCore RooFitCore)
+ROOT_ADD_GTEST(testRooSimultaneous testRooSimultaneous.cxx LIBRARIES RooFitCore RooFit)
+ROOT_ADD_GTEST(testRooTruthModel testRooTruthModel.cxx LIBRARIES RooFitCore RooFit)
+
+if (roofit_multiprocess)
+  ROOT_ADD_GTEST(testTestStatisticsPlot TestStatistics/testPlot.cxx LIBRARIES RooFitMultiProcess RooFitCore RooFit
+                   COPY_TO_BUILDDIR ${CMAKE_CURRENT_SOURCE_DIR}/TestStatistics/TestStatistics_ref.root)
+  ROOT_ADD_GTEST(testLikelihoodGradientJob TestStatistics/testLikelihoodGradientJob.cxx LIBRARIES RooFitMultiProcess RooFitCore m ROOT::TestSupport)
+  target_include_directories(testLikelihoodGradientJob PRIVATE ${RooFitCore_MultiProcess_TestStatistics_INCLUDE_DIR})
+  ROOT_ADD_GTEST(testLikelihoodJob TestStatistics/testLikelihoodJob.cxx LIBRARIES RooFitMultiProcess RooFitCore m)
+  target_include_directories(testLikelihoodJob PRIVATE ${RooFitCore_MultiProcess_TestStatistics_INCLUDE_DIR})
+endif()
+
+if(mathmore)
+  list(APPEND ROOFITMORE_LIBRARIES RooFitMore)
+endif()
+
+#--stressRooFit----------------------------------------------------------------------------------
+ROOT_EXECUTABLE(stressRooFit stressRooFit.cxx LIBRARIES RooFit Gpad ${ROOFITMORE_LIBRARIES})
+if(mathmore)
+    target_compile_definitions(stressRooFit PRIVATE ROOFITMORE)
+endif()
+
+configure_file(stressRooFit_ref.root stressRooFit_ref.root COPYONLY)
+if(roofit_legacy_eval_backend)
+  ROOT_ADD_TEST(test-stressroofit-legacy COMMAND stressRooFit -b legacy FAILREGEX "FAILED|Error in")
+endif()
+ROOT_ADD_TEST(test-stressroofit-cpu COMMAND stressRooFit -b cpu FAILREGEX "FAILED|Error in")
+ROOT_ADD_TEST(test-stressroofit-codegen_no_grad COMMAND stressRooFit -b codegen_no_grad FAILREGEX "FAILED|Error in")
+if(clad)
+  ROOT_ADD_TEST(test-stressroofit-codegen COMMAND stressRooFit -b codegen FAILREGEX "FAILED|Error in")
+endif()
+if(cuda)
+  ROOT_ADD_TEST(test-stressroofit-cuda COMMAND stressRooFit -b cuda FAILREGEX "FAILED|Error in" RESOURCE_LOCK GPU)
+endif()
+if(dataframe)
+  ROOT_ADD_GTEST(testActionHelpers testActionHelpers.cxx LIBRARIES ROOTDataFrame RooFitCore)
+endif()
+
+ROOT_ADD_GTEST(testRooWorkspace testRooWorkspace.cxx LIBRARIES RooFit
+               COPY_TO_BUILDDIR
+               ${CMAKE_CURRENT_SOURCE_DIR}/data/test_workspace_01.root
+               ${CMAKE_CURRENT_SOURCE_DIR}/data/workspace_with_model_config_classdef_6.root
+               )
