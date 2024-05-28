@@ -37,13 +37,9 @@ if(roofit_legacy_eval_backend)
   )
 endif()
 
-set (EXTRA_DICT_OPTS)
-if (runtime_cxxmodules AND WIN32)
-  set (EXTRA_DICT_OPTS NO_CXXMODULE)
-endif()
+add_library(RooFitCore SHARED)
 
-ROOT_STANDARD_LIBRARY_PACKAGE(RooFitCore
-  HEADERS
+set(sources_headers
     Roo1DTable.h
     RooAICRegistry.h
     RooAbsAnaConvPdf.h
@@ -245,7 +241,11 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFitCore
     RooWorkspaceHandle.h
     RooWrapperPdf.h
     ${LegacyEvalBackendHeaders}
-  SOURCES
+)
+
+list(TRANSFORM sources_headers PREPEND "inc/")
+
+set(sources_cxx
     src/BatchModeDataHelpers.cxx
     src/ConstraintHelpers.cxx
     src/FitHelpers.cxx
@@ -455,12 +455,19 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFitCore
     src/TestStatistics/SharedOffset.cxx
     ${LegacyEvalBackendSources}
     ${RooFitMPTestStatisticsSources}
-  DICTIONARY_OPTIONS
-    "-writeEmptyRootPCM"
-  LIBRARIES
+)
+
+target_sources(RooFitCore PRIVATE ${sources_headers} ${sources_cxx})
+set_target_properties(RooFitCore PROPERTIES PUBLIC_HEADER "${sources_headers}")
+
+target_include_directories(RooFitCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
+target_link_libraries(RooFitCore PRIVATE
     RooBatchCompute
     ${EXTRA_LIBRARIES}
-  DEPENDENCIES
+)
+
+target_link_libraries(RooFitCore PUBLIC
     Core
     Hist
     Graf
@@ -472,9 +479,23 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFitCore
     Foam
     Smatrix
     ${EXTRA_DEPENDENCIES}
-  LINKDEF
-    inc/LinkDef.h
-  ${EXTRA_DICT_OPTS}
+)
+
+ROOT_GENERATE_DICTIONARY(G__RooFitCore ${sources_headers}
+    LINKDEF inc/LinkDef.h
+    MODULE RooFitCore
+    OPTIONS --deep
+)
+
+# Install the dictionaries.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libRooFitCore_rdict.pcm
+              ${CMAKE_CURRENT_BINARY_DIR}/libRooFitCore.rootmap
+        DESTINATION lib)
+
+# Install the libraries and header files.
+install(TARGETS RooFitCore
+        LIBRARY DESTINATION lib
+        PUBLIC_HEADER DESTINATION include
 )
 
 # The following definitions are PUBLIC so they can also be used in ROOT-internal tests
@@ -507,4 +528,6 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   target_compile_options(RooFitCore PUBLIC -fno-math-errno)
 endif()
 
-ROOT_ADD_TEST_SUBDIRECTORY(test)
+if(testing)
+  add_subdirectory(test)
+endif()

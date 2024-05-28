@@ -9,46 +9,34 @@
 # @author Jonas Rembser, CERN
 ############################################################################
 
-# If RapidYAML can be found on the system, we will also compile the RapidYAML backend besides the
-# nlohmann-json backend. Like this we can also convert to yaml.
+add_library(RooFitJSONInterface SHARED)
 
-# The RapidYAML backend is always disabled because it doesn't work anymore for
-# RooFitHS3. The nlohmann_json interface is always used and works well, hence
-# rapidyaml was not tested anymore. The relevant code is still left in the
-# CMakeLists.txt in case someone wants to revive the RapilYAML backend.
-
-# message(STATUS "Looking for RapidYAML (used by RooFit)")
-# find_package(ryml)
-
-if(${RYML_FOUND})
-  message(STATUS "RapidYAML found, compiling also RooFit JSON Interface with RapidYAML parser")
-  set(ParserSources src/JSONParser.cxx src/RYMLParser.cxx)
-  add_compile_definitions(ROOFIT_WITH_RYML)
-else()
-  set(ParserSources src/JSONParser.cxx)
-  message(STATUS "RapidYAML not found, only compiling RooFit with nlohmann-json parser")
-endif()
-
-ROOT_STANDARD_LIBRARY_PACKAGE(RooFitJSONInterface
-  HEADERS
+set(sources_headers
     RooFit/Detail/JSONInterface.h
-  SOURCES
+)
+
+list(TRANSFORM sources_headers PREPEND "inc/")
+
+set(sources_cxx
     src/JSONInterface.cxx
-    ${ParserSources}
-  DICTIONARY_OPTIONS
-    "-writeEmptyRootPCM"
-  LIBRARIES
+    src/JSONParser.cxx
+)
+
+target_sources(RooFitJSONInterface PRIVATE ${sources_headers} ${sources_cxx})
+set_target_properties(RooFitJSONInterface PROPERTIES PUBLIC_HEADER "${sources_headers}")
+
+target_include_directories(RooFitJSONInterface PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
+target_link_libraries(RooFitJSONInterface PRIVATE
     Core
 )
 
-if(${RYML_FOUND})
-  target_include_directories(RooFitJSONInterface PRIVATE ${RYML_INCLUDE_DIRS})
-  target_link_libraries(RooFitJSONInterface PRIVATE -lc4core -lryml)
-  target_link_directories(RooFitJSONInterface PRIVATE ${RYML_LIB_DIR})
-endif()
+# Install the libraries and header files.
+install(TARGETS RooFitJSONInterface
+        LIBRARY DESTINATION lib
+        PUBLIC_HEADER DESTINATION include
+)
 
-if(builtin_nlohmannjson)
-  target_include_directories(RooFitJSONInterface PRIVATE ${CMAKE_SOURCE_DIR}/builtins)
-else()
-  target_link_libraries(RooFitJSONInterface PRIVATE nlohmann_json::nlohmann_json)
-endif()
+find_package(nlohmann_json)
+
+target_link_libraries(RooFitJSONInterface PRIVATE nlohmann_json::nlohmann_json)

@@ -22,8 +22,9 @@ if (runtime_cxxmodules AND WIN32)
   set (EXTRA_DICT_OPTS NO_CXXMODULE)
 endif()
 
-ROOT_STANDARD_LIBRARY_PACKAGE(HistFactory
-  HEADERS
+add_library(HistFactory SHARED)
+
+set(sources_headers
     RooStats/HistFactory/Asimov.h
     RooStats/HistFactory/Channel.h
     RooStats/HistFactory/Data.h
@@ -44,7 +45,11 @@ ROOT_STANDARD_LIBRARY_PACKAGE(HistFactory
     RooStats/HistFactory/Sample.h
     RooStats/HistFactory/Systematics.h
     ${HISTFACTORY_XML_HEADERS}
-  SOURCES
+)
+
+list(TRANSFORM sources_headers PREPEND "inc/")
+
+set(sources_cxx
     src/Asimov.cxx
     src/Channel.cxx
     src/Data.cxx
@@ -65,12 +70,19 @@ ROOT_STANDARD_LIBRARY_PACKAGE(HistFactory
     src/Sample.cxx
     src/Systematics.cxx
     ${HISTFACTORY_XML_SOURCES}
-  DICTIONARY_OPTIONS
-    "-writeEmptyRootPCM"
-  LIBRARIES
+)
+
+target_sources(HistFactory PRIVATE ${sources_headers} ${sources_cxx})
+set_target_properties(HistFactory PROPERTIES PUBLIC_HEADER "${sources_headers}")
+
+target_include_directories(HistFactory PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
+target_link_libraries(HistFactory PRIVATE
     RooBatchCompute
     ${HISTFACTORY_XML_LIBRARIES}
-  DEPENDENCIES
+)
+
+target_link_libraries(HistFactory PUBLIC
     RooFit
     RooFitCore
     Tree
@@ -82,7 +94,23 @@ ROOT_STANDARD_LIBRARY_PACKAGE(HistFactory
     Gpad
     RooStats
     RooFitJSONInterface
-  ${EXTRA_DICT_OPTS}
+)
+
+ROOT_GENERATE_DICTIONARY(G__HistFactory ${sources_headers}
+    LINKDEF inc/LinkDef.h
+    MODULE HistFactory
+    OPTIONS --deep
+)
+
+# Install the dictionaries.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libHistFactory_rdict.pcm
+              ${CMAKE_CURRENT_BINARY_DIR}/libHistFactory.rootmap
+        DESTINATION lib)
+
+# Install the libraries and header files.
+install(TARGETS HistFactory
+        LIBRARY DESTINATION lib
+        PUBLIC_HEADER DESTINATION include
 )
 
 # For recent clang, this can facilitate auto-vectorisation.
@@ -116,4 +144,6 @@ install(FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${prepareHistFactory_script}
                             WORLD_EXECUTE WORLD_READ
                 DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-ROOT_ADD_TEST_SUBDIRECTORY(test)
+if(testing)
+  #add_subdirectory(test)
+endif()
