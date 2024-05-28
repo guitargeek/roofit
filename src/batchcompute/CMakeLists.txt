@@ -1,0 +1,110 @@
+# Library which powers fast batch computations in Roofit.
+
+add_library(RooBatchCompute SHARED)
+
+set(sources_cxx
+    src/Initialisation.cxx
+)
+
+target_sources(RooBatchCompute PRIVATE ${sources_cxx})
+
+target_link_libraries(RooBatchCompute PUBLIC
+    Core
+    MathCore
+)
+
+install(TARGETS RooBatchCompute LIBRARY DESTINATION lib)
+
+target_include_directories(RooBatchCompute PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/res>)
+
+############################################################################################################################################
+# Instantiations of the shared objects which provide the actual computation functions.
+
+set(shared_object_sources src/RooBatchCompute.cxx src/ComputeFunctions.cxx)
+
+# Generic implementation for CPUs that don't support vector instruction sets.
+add_library(RooBatchCompute_GENERIC SHARED ${shared_object_sources})
+target_link_libraries(RooBatchCompute_GENERIC PUBLIC RooBatchCompute)
+install(TARGETS RooBatchCompute_GENERIC LIBRARY DESTINATION lib)
+target_compile_options(RooBatchCompute_GENERIC  PRIVATE ${common-flags} -DRF_ARCH=GENERIC)
+
+if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
+  target_sources(
+      RooBatchCompute
+      PRIVATE
+      FILE_SET private_header_files
+      TYPE HEADERS
+      BASE_DIRS res/
+      FILES
+          res/RooBatchCompute.h
+  )
+  target_sources(
+        RooBatchCompute_GENERIC
+        PRIVATE
+        FILE_SET private_header_files
+        TYPE HEADERS
+        BASE_DIRS src/ res/
+        FILES
+            res/RooBatchComputeTypes.h
+            res/RooHeterogeneousMath.h
+            res/RooNaNPacker.h
+            src/Batches.h
+            src/RooVDTHeaders.h
+  )
+endif()
+
+# Windows platform and ICC compiler need special code and testing, thus the feature has not been implemented yet for these.
+if (ROOT_PLATFORM MATCHES "linux|macosx" AND CMAKE_SYSTEM_PROCESSOR MATCHES x86_64 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+
+  target_compile_options(RooBatchCompute PRIVATE -DR__RF_ARCHITECTURE_SPECIFIC_LIBS)
+
+  add_library(RooBatchCompute_SSE4.1 SHARED ${shared_object_sources})
+  add_library(RooBatchCompute_AVX    SHARED ${shared_object_sources})
+  add_library(RooBatchCompute_AVX2   SHARED ${shared_object_sources})
+  add_library(RooBatchCompute_AVX512 SHARED ${shared_object_sources})
+  target_link_libraries(RooBatchCompute_SSE4.1 PUBLIC RooBatchCompute)
+  target_link_libraries(RooBatchCompute_AVX    PUBLIC RooBatchCompute)
+  target_link_libraries(RooBatchCompute_AVX2   PUBLIC RooBatchCompute)
+  target_link_libraries(RooBatchCompute_AVX512 PUBLIC RooBatchCompute)
+  install(TARGETS RooBatchCompute_SSE4.1 LIBRARY DESTINATION lib)
+  install(TARGETS RooBatchCompute_AVX    LIBRARY DESTINATION lib)
+  install(TARGETS RooBatchCompute_AVX2   LIBRARY DESTINATION lib)
+  install(TARGETS RooBatchCompute_AVX512 LIBRARY DESTINATION lib)
+
+  # Flags -fno-signaling-nans, -fno-trapping-math and -O3 are necessary to enable autovectorization (especially for GCC).
+  set(common-flags $<$<CXX_COMPILER_ID:GNU>:-fno-signaling-nans>)
+  list(APPEND common-flags $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>: -fno-trapping-math -O3>)
+
+  target_compile_options(RooBatchCompute_SSE4.1  PRIVATE ${common-flags} -msse4    -DRF_ARCH=SSE4)
+  target_compile_options(RooBatchCompute_AVX     PRIVATE ${common-flags} -mavx     -DRF_ARCH=AVX)
+  target_compile_options(RooBatchCompute_AVX2    PRIVATE ${common-flags} -mavx2    -DRF_ARCH=AVX2)
+  target_compile_options(RooBatchCompute_AVX512  PRIVATE ${common-flags} -march=skylake-avx512 -DRF_ARCH=AVX512)
+
+endif() # vector versions of library
+
+if (cuda)
+  set(shared_object_sources_cu src/RooBatchCompute.cu src/ComputeFunctions.cu src/CudaInterface.cu)
+  add_library(RooBatchCompute_CUDA SHARED ${shared_object_sources_cu})
+  target_link_libraries(RooBatchCompute_CUDA   PUBLIC RooBatchCompute)
+  target_compile_options(RooBatchCompute_CUDA  PRIVATE -lineinfo --expt-relaxed-constexpr)
+  install(TARGETS RooBatchCompute_CUDA LIBRARY DESTINATION lib)
+  if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
+    target_sources(
+        RooBatchCompute_CUDA
+        PRIVATE
+        FILE_SET private_header_files
+        TYPE HEADERS
+        BASE_DIRS src/
+        FILES
+            src/CudaInterface.h
+    )
+  endif()
+endif()
+
+if(vdt OR builtin_vdt)
+  foreach(library RooBatchCompute_GENERIC RooBatchCompute_SSE4.1 RooBatchCompute_AVX RooBatchCompute_AVX2 RooBatchCompute_AVX512 )
+    if(TARGET ${library})
+      target_link_libraries(${library} PRIVATE VDT::VDT)
+    endif()
+  endforeach()
+endif()

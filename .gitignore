@@ -30,3 +30,15 @@
 *.exe
 *.out
 *.app
+
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+
+# Build and install dirs
+build/
+install/
+
+# Nix build results
+result
+result-*

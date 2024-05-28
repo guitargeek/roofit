@@ -1,0 +1,66 @@
+# Authors:
+# * Jonas Rembser 05/2021
+
+################################################################################
+# Copyright (C) 1995-2020, Rene Brun and Fons Rademakers.                      #
+# All rights reserved.                                                         #
+#                                                                              #
+# For the licensing terms see $ROOTSYS/LICENSE.                                #
+# For the list of contributors see $ROOTSYS/README/CREDITS.                    #
+################################################################################
+
+
+import operator
+import warnings
+
+from ._rooabscollection import RooAbsCollection
+
+
+class RooArgSet(RooAbsCollection):
+    __cpp_name__ = "RooArgSet"
+
+    def __init__(self, *args, **kwargs):
+        """Pythonization of RooArgSet constructor to support implicit
+        conversion from Python sets.
+        """
+        # Note: This simple Pythonization caused me days of headache.
+        # Initially, I was also checking of `len(kwargs) == 0`, but it just
+        # didn't work. Eventually, I understood that when cppy attempts
+        # implicit conversion, a magic `__cppyy_no_implicit=True` keyword
+        # argument is added, hence the `len(kwargs) == 0` check breaks the
+        # implicit conversion!
+        if len(args) == 1 and isinstance(args[0], set):
+            warnings.warn(
+                "Constructing a RooArgSet from a Python set is deprecated and "
+                "will be removed in ROOT 6.44. Python sets are unordered, while "
+                "a RooArgSet is ordered, so this conversion can silently change "
+                "the order of the elements. Construct the RooArgSet from the "
+                "individual RooFit objects, or from a list or tuple of them "
+                "instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self._init(*args[0], **kwargs)
+            return
+        self._init(*args, **kwargs)
+
+    def __getitem__(self, key):
+        import ROOT
+
+        # other than the RooArgList, the RooArgSet also supports string keys
+        if isinstance(key, (str, ROOT.TString, ROOT.std.string)):
+            return self._getitem(key)
+
+        try:
+            operator.index(key)
+        except TypeError:
+            raise TypeError("RooArgList indices must be integers or strings")
+
+        # support for negative indexing
+        if key < 0:
+            key = key + len(self)
+
+        if key < 0 or key >= len(self):
+            raise IndexError("RooArgList index out of range")
+
+        return self._getitem(key)

@@ -1,0 +1,93 @@
+// Tests for the RooRealVar
+// Authors: Stephan Hageboeck, CERN  07/2020
+
+#include "RooRealVar.h"
+#include "RooUniformBinning.h"
+#include "RooBinning.h"
+
+#include <TFile.h>
+
+#include "gtest/gtest.h"
+
+/// ROOT-10781
+/// Searching binning in linked lists is slow, so these were replaced by unordered maps.
+/// Here, we test that sharing alternative binning still works.
+TEST(RooRealVar, AlternativeBinnings)
+{ RooArgSet survivingX;
+  {
+    RooRealVar x("x", "x", -10, 10);
+    x.setBinning(RooUniformBinning(-9, 10, 20, "uniform"), "uniform");
+
+    RooArgSet xSet(x);
+    RooArgSet clones;
+    xSet.snapshot(clones, true);
+
+    auto& uniform = dynamic_cast<RooRealVar&>(clones["x"]).getBinning("uniform");
+    EXPECT_TRUE(uniform.isUniform());
+    EXPECT_EQ(uniform.lowBound(), -9.);
+    EXPECT_EQ(uniform.highBound(), 10.);
+    uniform.setRange(-10., 10.);
+
+    double boundaries[] = {-5., 5., 10.};
+    x.setBinning(RooBinning(2, boundaries, "custom"), "uniform");
+
+    auto& overwrittenBinning = dynamic_cast<RooRealVar&>(clones["x"]).getBinning("uniform");
+    EXPECT_EQ(overwrittenBinning.lowBound(), -5.);
+    EXPECT_EQ(overwrittenBinning.highBound(), 10.);
+    EXPECT_EQ(overwrittenBinning.binWidth(0), 10.);
+
+    auto& uniformFromX = x.getBinning("uniform");
+    EXPECT_EQ(&uniformFromX, &overwrittenBinning);
+    EXPECT_EQ(uniformFromX.lowBound(), -5.);
+
+    RooArgSet(x).snapshot(survivingX);
+  }
+
+  auto& transferredOwnership = dynamic_cast<RooRealVar&>(survivingX["x"]).getBinning("uniform");
+  EXPECT_EQ(transferredOwnership.numBins(), 2);
+
+  // test removing the binning too
+  auto& var = dynamic_cast<RooRealVar&>(survivingX["x"]);
+  EXPECT_TRUE( var.hasBinning("uniform") );
+  var.removeBinning("uniform");
+  EXPECT_FALSE( var.hasBinning("uniform") );
+
+  // test creating and removing non-shared binnings/ranges
+  EXPECT_FALSE( var.hasRange("myRange") );
+  var.setRange("myRange",0,1,false);
+  EXPECT_TRUE( var.hasRange("myRange") );
+  std::unique_ptr<RooRealVar> var2(dynamic_cast<RooRealVar*>(var.clone()));
+  var2->setRange("myRange",1,2);
+  EXPECT_EQ( var.getMin("myRange"), 0. ); // still has old range, because not shared
+  EXPECT_EQ( var2->getMin("myRange"), 1. );
+  var2->removeBinning("myRange");
+  EXPECT_FALSE( var2->hasRange("myRange") );
+  EXPECT_TRUE( var.hasRange("myRange") );
+
+}
+
+/// ROOT-10781
+/// Searching binning in linked lists is slow, so these were replaced by unordered maps.
+/// Here, we test that sharing works also after writing to files.
+TEST(RooRealVar, AlternativeBinningsPersistency) {
+  RooArgSet localCopy;
+  {
+    TFile infile("testRooRealVar_data1.root");
+    ASSERT_TRUE(infile.IsOpen());
+
+    RooArgSet* fromFile = nullptr;
+    infile.GetObject("SetWithX", fromFile);
+    ASSERT_NE(fromFile, nullptr);
+
+    fromFile->snapshot(localCopy);
+  }
+
+  RooRealVar& x = dynamic_cast<RooRealVar&>(localCopy["x"]);
+  ASSERT_TRUE(x.hasBinning("sharedBinning"));
+
+  auto& binningFromFile = x.getBinning("sharedBinning");
+  EXPECT_EQ(binningFromFile.lowBound(), -5.);
+  EXPECT_EQ(binningFromFile.highBound(), 10.);
+  EXPECT_EQ(binningFromFile.binWidth(0), 10.);
+
+}
