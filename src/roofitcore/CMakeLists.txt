@@ -468,6 +468,7 @@ target_link_libraries(RooFitCore PUBLIC
     MathCore
     Foam
     Smatrix
+    TestSupport
     ${EXTRA_DEPENDENCIES}
 )
 
