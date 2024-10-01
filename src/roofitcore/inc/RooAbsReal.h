@@ -275,10 +275,6 @@ public:
 
   enum ScaleType { Raw, Relative, NumEvent, RelativeExpected } ;
 
-  // Forwarder function for backward compatibility
-  virtual RooPlot *plotSliceOn(RooPlot *frame, const RooArgSet& sliceSet, Option_t* drawOptions="L",
-                double scaleFactor=1.0, ScaleType stype=Relative, const RooAbsData* projData=nullptr) const;
-
   // Fill an existing histogram
   TH1 *fillHistogram(TH1 *hist, const RooArgList &plotVars,
            double scaleFactor= 1, const RooArgSet *projectedVars= nullptr, bool scaling=true,
@@ -341,11 +337,9 @@ public:
   static void logEvalError(const RooAbsReal* originator, const char* origName, const char* message, const char* serverValueString=nullptr) ;
   static void printEvalErrors(std::ostream&os=std::cout, Int_t maxPerNode=10000000) ;
   static Int_t numEvalErrors() ;
-  static Int_t numEvalErrorItems() ;
+  inline static Int_t numEvalErrorItems() { return _evalErrorList.size(); }
 
-
-  typedef std::map<const RooAbsArg*,std::pair<std::string,std::list<EvalError> > >::const_iterator EvalErrorIter ;
-  static EvalErrorIter evalErrorIter() ;
+  inline static auto evalErrorIter() { return _evalErrorList.begin(); }
 
   static void clearEvalErrorLog() ;
 
@@ -545,7 +539,7 @@ private:
    TString _label;                                         ///< Plot label for objects value
    bool _forceNumInt = false;                              ///< Force numerical integration if flag set
    std::unique_ptr<RooNumIntConfig> _specIntegratorConfig; // Numeric integrator configuration specific for this object
-   TreeReadBuffer *_treeReadBuffer = nullptr;              //! A buffer for reading values from trees
+   std::unique_ptr<TreeReadBuffer> _treeReadBuffer;        //! A buffer for reading values from trees
    bool _selectComp = true;                                //! Component selection flag for RooAbsPdf::plotCompOn
    mutable RooFit::UniqueId<RooArgSet>::Value_t _lastNormSetId = RooFit::UniqueId<RooArgSet>::nullval; ///<!
 

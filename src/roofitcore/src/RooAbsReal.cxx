@@ -183,11 +183,8 @@ RooAbsReal::RooAbsReal() {}
 ////////////////////////////////////////////////////////////////////////////////
 /// Constructor with unit label
 
-RooAbsReal::RooAbsReal(const char *name, const char *title, const char *unit) :
-  RooAbsArg(name,title), _unit(unit)
+RooAbsReal::RooAbsReal(const char *name, const char *title, const char *unit) : RooAbsReal{name, title, 0.0, 0.0, unit}
 {
-  setValueDirty() ;
-  setShapeDirty() ;
 }
 
 
@@ -219,13 +216,7 @@ RooAbsReal::RooAbsReal(const RooAbsReal& other, const char* name) :
 ////////////////////////////////////////////////////////////////////////////////
 /// Destructor
 
-RooAbsReal::~RooAbsReal()
-{
-   if (_treeReadBuffer) {
-      delete _treeReadBuffer;
-   }
-   _treeReadBuffer = nullptr;
-}
+RooAbsReal::~RooAbsReal() {}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -268,13 +259,10 @@ bool RooAbsReal::isIdentical(const RooAbsArg& other, bool assumeSameType) const
 
 TString RooAbsReal::getTitle(bool appendUnit) const
 {
-  TString title(GetTitle());
   if(appendUnit && 0 != strlen(getUnit())) {
-    title.Append(" (");
-    title.Append(getUnit());
-    title.Append(")");
+    return std::string{GetTitle()} + " (" + getUnit() + ")";
   }
-  return title;
+  return GetTitle();
 }
 
 
@@ -295,25 +283,8 @@ double RooAbsReal::getValV(const RooArgSet* nset) const
     _value = traceEval(nullptr) ;
     //     clearValueDirty() ;
   }
-  //   cout << "RooAbsReal::getValV(" << GetName() << ") writing _value = " << _value << std::endl ;
 
   return hideOffset() ? _value + offset() : _value;
-}
-
-
-////////////////////////////////////////////////////////////////////////////////
-
-Int_t RooAbsReal::numEvalErrorItems()
-{
-  return _evalErrorList.size() ;
-}
-
-
-////////////////////////////////////////////////////////////////////////////////
-
-RooAbsReal::EvalErrorIter RooAbsReal::evalErrorIter()
-{
-  return _evalErrorList.begin() ;
 }
 
 
@@ -760,23 +731,9 @@ TString RooAbsReal::integralNameSuffix(const RooArgSet& iset, const RooArgSet* n
 {
   TString name ;
   if (!iset.empty()) {
-
-    RooArgSet isetTmp(iset) ;
-    isetTmp.sort() ;
-
-    name.Append("_Int[") ;
-    bool first(true) ;
-    for(RooAbsArg * arg : isetTmp) {
-      if (first) {
-   first=false ;
-      } else {
-   name.Append(",") ;
-      }
-      name.Append(arg->GetName()) ;
-    }
+    name.Append("_Int[" + RooHelpers::getColonSeparatedNameString(iset, ','));
     if (rangeName) {
-      name.Append("|") ;
-      name.Append(rangeName) ;
+      name.Append("|" + std::string{rangeName});
     }
     name.Append("]");
   } else if (!omitEmpty) {
@@ -784,24 +741,10 @@ TString RooAbsReal::integralNameSuffix(const RooArgSet& iset, const RooArgSet* n
   }
 
   if (nset && !nset->empty()) {
-
-    RooArgSet nsetTmp(*nset) ;
-    nsetTmp.sort() ;
-
-    name.Append("_Norm[") ;
-    bool first(true);
-    for(RooAbsArg * arg : nsetTmp) {
-      if (first) {
-   first=false ;
-      } else {
-   name.Append(",") ;
-      }
-      name.Append(arg->GetName()) ;
-    }
+    name.Append("_Norm[" + RooHelpers::getColonSeparatedNameString(*nset, ','));
     const RooAbsPdf* thisPdf = dynamic_cast<const RooAbsPdf*>(this) ;
     if (thisPdf && thisPdf->normRange()) {
-      name.Append("|") ;
-      name.Append(thisPdf->normRange()) ;
+      name.Append("|" + std::string{thisPdf->normRange()}) ;
     }
     name.Append("]") ;
   }
@@ -931,12 +874,10 @@ const RooAbsReal *RooAbsReal::createPlotProjection(const RooArgSet &dependentVar
   RooArgSet empty;
   if(nullptr == projectedVars) projectedVars= &empty;
 
-  TString name = GetName() ;
+  std::string name = GetName();
   name += integralNameSuffix(*projectedVars,&normSet,rangeName,true) ;
 
-  TString title(GetTitle());
-  title.Prepend("Projection of ");
-
+  std::string title = std::string{"Projection of "} + GetTitle();
 
   std::unique_ptr<RooAbsReal> projected{theClone->createIntegral(*projectedVars,normSet,rangeName)};
 
@@ -950,8 +891,8 @@ const RooAbsReal *RooAbsReal::createPlotProjection(const RooArgSet &dependentVar
     static_cast<RooRealIntegral&>(*projected).setAllowComponentSelection(true);
   }
 
-  projected->SetName(name.Data()) ;
-  projected->SetTitle(title.Data()) ;
+  projected->SetName(name.c_str()) ;
+  projected->SetTitle(title.c_str()) ;
 
   // Add the projection integral to the cloneSet so that it eventually gets cleaned up by the caller.
   RooAbsReal *projectedPtr = projected.get();
@@ -1674,14 +1615,7 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
     RooCmdArg rnorm = RooFit::NormRange(rcmd->getString(0)) ;
     argList.Add(&rnorm) ;
 
-    std::vector<std::string> rlist;
-
-    // Separate named ranges using strtok
-    for (const std::string& rangeNameToken : ROOT::Split(rcmd->getString(0), ",")) {
-      rlist.emplace_back(rangeNameToken);
-    }
-
-    for (const auto& rangeString : rlist) {
+    for (const auto& rangeString : ROOT::Split(rcmd->getString(0), ",")) {
       // Process each range with a separate command with a single range to be plotted
       rcmd->setString(0, rangeString.c_str());
       RooAbsReal::plotOn(frame,argList);
@@ -1753,20 +1687,16 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
     return frame ;
   }
 
-  PlotOpt o ;
   TString drawOpt(pc.getString("drawOption"));
 
   RooFitResult* errFR = static_cast<RooFitResult*>(pc.getObject("errorFR")) ;
-  double errZ = pc.getDouble("errorZ") ;
-  RooArgSet* errPars = pc.getSet("errorPars") ;
-  bool linMethod = pc.getInt("linearMethod") ;
   if (!drawOpt.Contains("P") && errFR) {
-    return plotOnWithErrorBand(frame,*errFR,errZ,errPars,argList,linMethod) ;
-  } else {
-    o.errorFR = errFR;
+      return plotOnWithErrorBand(frame, *errFR, pc.getDouble("errorZ"), pc.getSet("errorPars"), argList,
+                                 pc.getInt("linearMethod"));
   }
 
   // Extract values from named arguments
+  PlotOpt o ;
   o.numee       = pc.getInt("numee") ;
   o.drawOptions = drawOpt.Data();
   o.curveNameSuffix = pc.getString("curveNameSuffix") ;
@@ -1779,6 +1709,7 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
   o.interleave = (RooFit::MPSplit) pc.getInt("interleave") ;
   o.eeval      = pc.getDouble("evalErrorVal") ;
   o.doeeval   = pc.getInt("doEvalError") ;
+  o.errorFR = errFR;
 
   const RooArgSet* sliceSetTmp = pc.getSet("sliceSet");
   std::unique_ptr<RooArgSet> sliceSet{sliceSetTmp ? static_cast<RooArgSet*>(sliceSetTmp->Clone()) : nullptr};
@@ -1787,9 +1718,8 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
 
 
   // Look for category slice arguments and add them to the master slice list if found
-  const char* sliceCatState = pc.getString("sliceCatState",nullptr,true) ;
-  const RooLinkedList& sliceCatList = pc.getObjectList("sliceCatList") ;
-  if (sliceCatState) {
+  if (const char* sliceCatState = pc.getString("sliceCatState",nullptr,true)) {
+    const RooLinkedList& sliceCatList = pc.getObjectList("sliceCatList") ;
 
     // Make the master slice set if it doesnt exist
     if (!sliceSet) {
@@ -1797,12 +1727,11 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
     }
 
     // Loop over all categories provided by (multiple) Slice() arguments
-    auto catTokens = ROOT::Split(sliceCatState, ",");
     auto iter = sliceCatList.begin();
-    for (unsigned int i=0; i < catTokens.size(); ++i) {
+    for (auto const& catToken : ROOT::Split(sliceCatState, ",")) {
       if (auto scat = static_cast<RooCategory*>(*iter)) {
         // Set the slice position to the value indicate by slabel
-        scat->setLabel(catTokens[i]) ;
+        scat->setLabel(catToken);
         // Add the slice category to the master slice set
         sliceSet->add(*scat,false) ;
       }
@@ -1855,8 +1784,7 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
 
     // Take out the sliced variables
     for (const auto sliceArg : *sliceSet) {
-      RooAbsArg* arg = projectedVars.find(sliceArg->GetName()) ;
-      if (arg) {
+      if (RooAbsArg* arg = projectedVars.find(sliceArg->GetName())) {
         projectedVars.remove(*arg) ;
       } else {
         coutI(Plotting) << "RooAbsReal::plotOn(" << GetName() << ") slice variable "
@@ -1875,14 +1803,8 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
   cxcoutD(Plotting) << "RooAbsReal::plotOn(" << GetName() << ") Preprocessing: projectedVars = " << projectedVars << std::endl ;
 
 
-  RooPlot* ret ;
-  if (!asymCat) {
-    // Forward to actual calculation
-    ret = RooAbsReal::plotOn(frame,o) ;
-  } else {
-    // Forward to actual calculation
-    ret = RooAbsReal::plotAsymOn(frame,*asymCat,o) ;
-  }
+  // Forward to actual calculation
+  RooPlot* ret = asymCat ? RooAbsReal::plotAsymOn(frame,*asymCat,o) : RooAbsReal::plotOn(frame,o);
 
   // Optionally adjust line/fill attributes
   Int_t lineColor = pc.getInt("lineColor") ;
@@ -1930,14 +1852,11 @@ RooPlot* RooAbsReal::plotOn(RooPlot* frame, RooLinkedList& argList) const
 /// possible, which can be selection with 'stype' (see RooAbsPdf::plotOn() for details).
 ///
 /// The default projection behaviour can be overridden by supplying an optional set of dependents
-/// to project. For most cases, plotSliceOn() and plotProjOn() provide a more intuitive interface
-/// to modify the default projection behaviour.
+/// to project via RooFit command arguments.
 //_____________________________________________________________________________
 // coverity[PASS_BY_VALUE]
 RooPlot* RooAbsReal::plotOn(RooPlot *frame, PlotOpt o) const
 {
-
-
   // Sanity checks
   if (plotSanityChecks(frame)) return frame ;
 
@@ -1946,8 +1865,7 @@ RooPlot* RooAbsReal::plotOn(RooPlot *frame, PlotOpt o) const
   if (o.projData) {
     cxcoutD(Plotting) << "RooAbsReal::plotOn(" << GetName() << ") have ProjData with observables = " << *o.projData->get() << std::endl ;
     if (o.projDataSet) {
-      std::unique_ptr<RooArgSet> tmp{o.projData->get()->selectCommon(*o.projDataSet)};
-      projDataVars.add(*tmp) ;
+      projDataVars.add(*std::unique_ptr<RooArgSet>{o.projData->get()->selectCommon(*o.projDataSet)}) ;
       cxcoutD(Plotting) << "RooAbsReal::plotOn(" << GetName() << ") have ProjDataSet = " << *o.projDataSet << " will only use this subset of projData" << std::endl ;
     } else {
       cxcoutD(Plotting) << "RooAbsReal::plotOn(" << GetName() << ") using full ProjData" << std::endl ;
@@ -2249,40 +2167,6 @@ RooPlot* RooAbsReal::plotOn(RooPlot *frame, PlotOpt o) const
   plotVar->setVal(oldPlotVarVal); // reset the plot variable value to not disturb the original state
   return frame;
 }
-
-
-
-
-////////////////////////////////////////////////////////////////////////////////
-/// \deprecated OBSOLETE -- RETAINED FOR BACKWARD COMPATIBILITY. Use plotOn() with Slice() instead
-
-RooPlot* RooAbsReal::plotSliceOn(RooPlot *frame, const RooArgSet& sliceSet, Option_t* drawOptions,
-             double scaleFactor, ScaleType stype, const RooAbsData* projData) const
-{
-  RooArgSet projectedVars ;
-  makeProjectionSet(frame->getPlotVar(),frame->getNormVars(),projectedVars,true) ;
-
-  // Take out the sliced variables
-  for(RooAbsArg * sliceArg : sliceSet) {
-    RooAbsArg* arg = projectedVars.find(sliceArg->GetName()) ;
-    if (arg) {
-      projectedVars.remove(*arg) ;
-    } else {
-      coutI(Plotting) << "RooAbsReal::plotSliceOn(" << GetName() << ") slice variable "
-            << sliceArg->GetName() << " was not projected anyway" << std::endl ;
-    }
-  }
-
-  PlotOpt o ;
-  o.drawOptions = drawOptions ;
-  o.scaleFactor = scaleFactor ;
-  o.stype = stype ;
-  o.projData = projData ;
-  o.projSet = &projectedVars ;
-  return plotOn(frame,o) ;
-}
-
-
 
 
 //_____________________________________________________________________________
@@ -3159,11 +3043,8 @@ void RooAbsReal::attachToTree(TTree& t, Int_t bufSize)
       coutI(DataHandling) << "RooAbsReal::attachToTree(" << GetName() << ") TTree " << typeDetails->first << " branch " << GetName()
                   << " will be converted to double precision." << std::endl ;
       setAttribute(typeDetails->second.first.c_str(), true);
-      _treeReadBuffer = typeDetails->second.second().release();
+      _treeReadBuffer = typeDetails->second.second();
     } else {
-      if (_treeReadBuffer) {
-         delete _treeReadBuffer;
-      }
       _treeReadBuffer = nullptr;
 
       if (!typeName.CompareTo("Double_t")) {

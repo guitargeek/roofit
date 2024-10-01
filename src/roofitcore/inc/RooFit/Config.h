@@ -59,4 +59,8 @@ OwningPtr<T> makeOwningPtr(std::unique_ptr<U> &&ptr)
 
 } // namespace RooFit
 
+#ifndef R__DEPRECATED
+# define R__DEPRECATED(X, Y, Z)
+#endif
+
 #endif

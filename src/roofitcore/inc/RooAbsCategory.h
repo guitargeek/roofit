@@ -221,7 +221,7 @@ protected:
   static const decltype(_stateNames)::value_type& invalidCategory();
 
 private:
-  TreeReadBuffer *_treeReadBuffer = nullptr; //! A buffer for reading values from trees
+  std::unique_ptr<TreeReadBuffer> _treeReadBuffer; //! A buffer for reading values from trees
 
   ClassDefOverride(RooAbsCategory, 4) // Abstract discrete variable
 };

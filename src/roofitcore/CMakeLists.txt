@@ -16,15 +16,6 @@ if(roofit_multiprocess)
 endif()
 
 if(roofit_legacy_eval_backend)
-  set(LegacyEvalBackendHeaders
-    RooAbsOptTestStatistic.h
-    RooAbsTestStatistic.h
-    RooChi2Var.h
-    RooNLLVar.h
-    RooRealMPFE.h
-    RooXYChi2Var.h
-  )
-
   set(LegacyEvalBackendSources
     src/BidirMMapPipe.cxx
     src/BidirMMapPipe.h
@@ -240,7 +231,6 @@ set(sources_headers
     RooWorkspace.h
     RooWorkspaceHandle.h
     RooWrapperPdf.h
-    ${LegacyEvalBackendHeaders}
 )
 
 list(TRANSFORM sources_headers PREPEND "inc/")

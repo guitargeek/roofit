@@ -178,10 +178,6 @@ RooAbsCollection::~RooAbsCollection()
   if(_ownCont){
     deleteList() ;
   }
-  if (_hashAssistedFind) {
-    delete _hashAssistedFind;
-  }
-  _hashAssistedFind = nullptr;
 }
 
 
@@ -193,9 +189,6 @@ RooAbsCollection::~RooAbsCollection()
 
 void RooAbsCollection::deleteList()
 {
-  if (_hashAssistedFind) {
-    delete _hashAssistedFind;
-  }
   _hashAssistedFind = nullptr;
 
   // Built-in delete remaining elements
@@ -755,9 +748,6 @@ bool RooAbsCollection::remove(const RooAbsCollection& list, bool /*silent*/, boo
 
 void RooAbsCollection::removeAll()
 {
-  if (_hashAssistedFind) {
-    delete _hashAssistedFind;
-  }
   _hashAssistedFind = nullptr;
 
   if(_ownCont) {
@@ -930,7 +920,7 @@ RooAbsArg * RooAbsCollection::find(const char *name) const
 
   if (_hashAssistedFind || _list.size() >= _sizeThresholdForMapSearch) {
     if (!_hashAssistedFind || !_hashAssistedFind->isValid()) {
-      _hashAssistedFind = new HashAssistedFind{_list.begin(), _list.end()};
+      _hashAssistedFind = std::make_unique<HashAssistedFind>(_list.begin(), _list.end());
     }
 
     return _hashAssistedFind->find(nptr);
@@ -950,7 +940,7 @@ RooAbsArg * RooAbsCollection::find(const RooAbsArg& arg) const
 
   if (_hashAssistedFind || _list.size() >= _sizeThresholdForMapSearch) {
     if (!_hashAssistedFind || !_hashAssistedFind->isValid()) {
-      _hashAssistedFind = new HashAssistedFind{_list.begin(), _list.end()};
+      _hashAssistedFind = std::make_unique<HashAssistedFind>(_list.begin(), _list.end());
     }
 
     return _hashAssistedFind->find(nptr);
@@ -1628,10 +1618,8 @@ void RooAbsCollection::useHashMapForFind(bool flag) const
    }
 #endif
    if (flag && !_hashAssistedFind)
-      _hashAssistedFind = new HashAssistedFind{_list.begin(), _list.end()};
+      _hashAssistedFind = std::make_unique<HashAssistedFind>(_list.begin(), _list.end());
    if (!flag)
-      _hashAssistedFind = nullptr;
-      delete _hashAssistedFind;
       _hashAssistedFind = nullptr;
 }
 
