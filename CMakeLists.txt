@@ -10,6 +10,8 @@ include(${ROOT_USE_FILE})
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_INSTALL_BINDIR "bin" CACHE PATH "user executables (bin)")
+set(CMAKE_INSTALL_INCLUDEDIR "include" CACHE PATH "header files")
+set(CMAKE_INSTALL_LIBDIR "lib" CACHE PATH "libraries")
 
 if(ccache)
   set(CMAKE_C_COMPILER_LAUNCHER ccache)
