@@ -7,8 +7,9 @@ clangStdenv.mkDerivation {
   buildInputs = [
     (root.overrideAttrs (old: { cmakeFlags = old.cmakeFlags ++ [ "-Droofit=OFF -Dtmva=OFF -Dtestsupport=ON" ]; }))
     cmake
-    gtest
     gsl
+    gtest
+    nlohmann_json
     pkg-config
   ];
 

@@ -13,7 +13,6 @@
 #include <RooFuncWrapper.h>
 
 #include <RooAbsData.h>
-#include <RooFit/Detail/BatchModeDataHelpers.h>
 #include <RooFit/Detail/CodeSquashContext.h>
 #include <RooFit/Evaluator.h>
 #include <RooGlobalFunc.h>
@@ -21,7 +20,9 @@
 #include <RooMsgService.h>
 #include <RooRealVar.h>
 #include <RooSimultaneous.h>
+
 #include "RooEvaluatorWrapper.h"
+#include "RooFit/BatchModeDataHelpers.h"
 
 #include <TROOT.h>
 #include <TSystem.h>
@@ -61,15 +62,9 @@ RooFuncWrapper::RooFuncWrapper(const char *name, const char *title, RooAbsReal &
    // Get the parameters.
    RooArgSet paramSet;
    obj.getParameters(data ? data->get() : nullptr, paramSet);
-   RooArgSet floatingParamSet;
-   for (RooAbsArg *param : paramSet) {
-      if (!param->isConstant()) {
-         floatingParamSet.add(*param);
-      }
-   }
 
    // Load the parameters and observables.
-   loadParamsAndData(&obj, floatingParamSet, data, simPdf);
+   loadParamsAndData(&obj, paramSet, data, simPdf);
 
    func = buildCode(obj);
 
@@ -100,7 +95,7 @@ void RooFuncWrapper::loadParamsAndData(RooAbsArg const *head, RooArgSet const &p
    std::map<RooFit::Detail::DataKey, std::span<const double>> spans;
 
    if (data) {
-      spans = RooFit::Detail::BatchModeDataHelpers::getDataSpans(*data, "", simPdf, true, false, vectorBuffers);
+      spans = RooFit::BatchModeDataHelpers::getDataSpans(*data, "", simPdf, true, false, vectorBuffers);
    }
 
    std::size_t idx = 0;
@@ -130,7 +125,7 @@ void RooFuncWrapper::loadParamsAndData(RooAbsArg const *head, RooArgSet const &p
    _gradientVarBuffer.resize(_params.size());
 
    if (head) {
-      _nodeOutputSizes = RooFit::Detail::BatchModeDataHelpers::determineOutputSizes(
+      _nodeOutputSizes = RooFit::BatchModeDataHelpers::determineOutputSizes(
          *head, [&spans](RooFit::Detail::DataKey key) -> int {
             auto found = spans.find(key);
             return found != spans.end() ? found->second.size() : -1;

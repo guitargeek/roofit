@@ -44,7 +44,7 @@ set(sources_headers
     RooAbsCategoryLValue.h
     RooAbsCollection.h
     RooAbsData.h
-    RooAbsDataFiller.h
+    RooAbsDataHelper.h
     RooAbsDataStore.h
     RooAbsFunc.h
     RooAbsGenContext.h
@@ -113,7 +113,6 @@ set(sources_headers
     RooFirstMoment.h
     RooFit.h
     RooFit/Config.h
-    RooFit/Detail/BatchModeDataHelpers.h
     RooFit/Detail/CodeSquashContext.h
     RooFit/Detail/MathFuncs.h
     RooFit/Detail/NormalizationHelpers.h
@@ -255,7 +254,7 @@ set(sources_cxx
     src/RooAbsCategoryLValue.cxx
     src/RooAbsCollection.cxx
     src/RooAbsData.cxx
-    src/RooAbsDataFiller.cxx
+    src/RooAbsDataHelper.cxx
     src/RooAbsDataStore.cxx
     src/RooAbsFunc.cxx
     src/RooAbsGenContext.cxx
@@ -468,7 +467,6 @@ target_link_libraries(RooFitCore PUBLIC
     MathCore
     Foam
     Smatrix
-    TestSupport
     ${EXTRA_DEPENDENCIES}
 )
 
