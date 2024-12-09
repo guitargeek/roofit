@@ -5,7 +5,7 @@ clangStdenv.mkDerivation {
   src = ./.;
 
   buildInputs = [
-    (root.overrideAttrs (old: { cmakeFlags = old.cmakeFlags ++ [ "-Droofit=OFF -Dtmva=OFF" ]; }))
+    (root.overrideAttrs (old: { cmakeFlags = old.cmakeFlags ++ [ "-Droofit=OFF -Dtmva=OFF -Dtestsupport=ON" ]; }))
     cmake
     gtest
     gsl
