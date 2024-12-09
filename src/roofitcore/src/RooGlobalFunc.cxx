@@ -18,6 +18,7 @@
 
 #include <RooGlobalFunc.h>
 
+#include <RooAbsData.h>
 #include <RooAbsPdf.h>
 #include <RooCategory.h>
 #include <RooDataHist.h>
@@ -31,10 +32,9 @@
 #include <RooRealVar.h>
 
 #include <TH1.h>
+#include <TInterpreter.h>
 
 #include <algorithm>
-
-using std::ostream;
 
 namespace RooFit {
 
@@ -78,6 +78,23 @@ RooCmdArg processFlatMap(const char *name, Func_t func, Detail::FlatMap<Key_t, V
    }
    container.setProcessRecArgs(true, false);
    return container;
+}
+
+int interpretString(std::string const &s)
+{
+   return gInterpreter->ProcessLine(s.c_str());
+}
+
+Style_t interpretLineStyleString(std::string const &style)
+{
+   using Map = std::unordered_map<std::string, Style_t>;
+   // Style dictionary to define matplotlib conventions
+   static Map styleMap{{"-", kSolid}, {"--", kDashed}, {":", kDotted}, {"-.", kDashDotted}};
+   auto found = styleMap.find(style);
+   if (found != styleMap.end())
+      return found->second;
+   // Use interpreter if style was not matched in the style map
+   return gInterpreter->ProcessLine(style.c_str());
 }
 
 } // namespace
@@ -182,25 +199,33 @@ RooCmdArg VLines()
 {
    return RooCmdArg("VLines", 1, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
 }
-RooCmdArg LineColor(Color_t color)
+RooCmdArg LineColor(TColorNumber color)
 {
-   return RooCmdArg("LineColor", color);
+   return RooCmdArg("LineColor", color.number());
 }
 RooCmdArg LineStyle(Style_t style)
 {
    return RooCmdArg("LineStyle", style);
 }
+RooCmdArg LineStyle(std::string const &style)
+{
+   return LineStyle(interpretLineStyleString(style));
+}
 RooCmdArg LineWidth(Width_t width)
 {
    return RooCmdArg("LineWidth", width);
 }
-RooCmdArg FillColor(Color_t color)
+RooCmdArg FillColor(TColorNumber color)
 {
-   return RooCmdArg("FillColor", color);
+   return RooCmdArg("FillColor", color.number());
 }
 RooCmdArg FillStyle(Style_t style)
 {
    return RooCmdArg("FillStyle", style);
+}
+RooCmdArg FillStyle(std::string const &style)
+{
+   return FillStyle(interpretString(style));
 }
 RooCmdArg ProjectionRange(const char *rangeName)
 {
@@ -278,13 +303,17 @@ RooCmdArg MarkerStyle(Style_t style)
 {
    return RooCmdArg("MarkerStyle", style, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
 }
+RooCmdArg MarkerStyle(std::string const &color)
+{
+   return MarkerStyle(interpretString(color));
+}
 RooCmdArg MarkerSize(Size_t size)
 {
    return RooCmdArg("MarkerSize", 0, 0, size, 0, nullptr, nullptr, nullptr, nullptr);
 }
-RooCmdArg MarkerColor(Color_t color)
+RooCmdArg MarkerColor(TColorNumber color)
 {
-   return RooCmdArg("MarkerColor", color, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
+   return RooCmdArg("MarkerColor", color.number());
 }
 RooCmdArg CutRange(const char *rangeName)
 {
@@ -398,7 +427,11 @@ RooCmdArg Extended(bool flag)
 }
 RooCmdArg DataError(Int_t etype)
 {
-   return RooCmdArg("DataError", (Int_t)etype, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
+   return RooCmdArg("DataError", etype);
+}
+RooCmdArg DataError(std::string const &etype)
+{
+   return DataError(RooAbsData::errorTypeFromString(etype));
 }
 RooCmdArg NumCPU(Int_t nCPU, Int_t interleave)
 {
@@ -942,18 +975,18 @@ RooCmdArg TagName(const char *name)
 {
    return RooCmdArg("LabelName", 0, 0, 0, 0, name, nullptr, nullptr, nullptr);
 }
-RooCmdArg OutputStream(ostream &os)
+RooCmdArg OutputStream(std::ostream &os)
 {
-   return RooCmdArg("OutputStream", 0, 0, 0, 0, nullptr, nullptr, new RooHelpers::WrapIntoTObject<ostream>(os),
+   return RooCmdArg("OutputStream", 0, 0, 0, 0, nullptr, nullptr, new RooHelpers::WrapIntoTObject<std::ostream>(os),
                     nullptr);
 }
 RooCmdArg Prefix(bool flag)
 {
    return RooCmdArg("Prefix", flag, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
 }
-RooCmdArg Color(Color_t color)
+RooCmdArg Color(TColorNumber color)
 {
-   return RooCmdArg("Color", color, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
+   return RooCmdArg("Color", color.number());
 }
 
 // RooWorkspace::import() arguments
@@ -1085,7 +1118,7 @@ RooCmdArg LinkFlatMap(FlatMap<std::string, RooAbsData *> const &args)
    return processFlatMap("LinkDataSliceMany", processLinkItem<RooAbsData>, args);
 }
 
-}
+} // namespace Detail
 
 } // namespace RooFit
 

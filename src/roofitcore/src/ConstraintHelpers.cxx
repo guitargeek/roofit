@@ -1,3 +1,5 @@
+/// \cond ROOFIT_INTERNAL
+
 /*
  * Project: RooFit
  * Authors:
@@ -52,7 +54,7 @@ getGlobalObservables(RooAbsPdf const &pdf, RooArgSet const *globalObservables, c
 
    if (globalObservablesTag) {
       std::unique_ptr<RooArgSet> allVars{pdf.getVariables()};
-      return std::unique_ptr<RooArgSet>{static_cast<RooArgSet *>(allVars->selectByAttrib(globalObservablesTag, true))};
+      return std::unique_ptr<RooArgSet>{allVars->selectByAttrib(globalObservablesTag, true)};
    }
 
    // no global observables specified
@@ -175,3 +177,5 @@ std::unique_ptr<RooAbsReal> createConstraintTerm(std::string const &name, RooAbs
    // no constraints
    return nullptr;
 }
+
+/// \endcond

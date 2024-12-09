@@ -50,7 +50,6 @@ implemented using the container denoted by RooAbsCollection::Storage_t.
 #include <fstream>
 #include <memory>
 
-ClassImp(RooAbsCollection);
 
 namespace RooFit {
 namespace Detail {
@@ -1456,9 +1455,9 @@ void RooAbsCollection::printLatex(std::ostream& ofs, Int_t ncol, const char* opt
    RooRealVar* par = static_cast<RooRealVar*>((static_cast<RooArgList*>(listListRRV.At(k)))->at(i+j*nrow)) ;
    if (par) {
      if (option) {
-       ofs << *std::unique_ptr<TString>{par->format(sigDigit,(k==0)?option:sibOption.Data())};
+       ofs << par->format(sigDigit,(k==0)?option:sibOption.Data());
      } else {
-       ofs << *std::unique_ptr<TString>{par->format((k==0)?*formatCmd:sibFormatCmd)};
+       ofs << par->format((k==0)?*formatCmd:sibFormatCmd);
      }
    }
    if (!(j==ncol-1 && k==nlist-1)) {
@@ -1583,18 +1582,6 @@ void RooAbsCollection::sortTopologically() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-/// Factory for legacy iterators.
-
-std::unique_ptr<RooAbsCollection::LegacyIterator_t> RooAbsCollection::makeLegacyIterator (bool forward) const {
-   if (!forward) {
-      ccoutE(DataHandling) << "The legacy RooFit collection iterators don't support reverse iterations, any more. "
-                           << "Use begin() and end()" << std::endl;
-   }
-  return std::make_unique<LegacyIterator_t>(_list);
-}
-
-
-////////////////////////////////////////////////////////////////////////////////
 /// Insert an element into the owned collections.
 void RooAbsCollection::insert(RooAbsArg* item) {
   _list.push_back(item);
@@ -1627,12 +1614,13 @@ void RooAbsCollection::useHashMapForFind(bool flag) const
       throw std::runtime_error(msg.str());
    }
 #endif
-   if (flag && !_hashAssistedFind)
+   if (flag && !_hashAssistedFind) {
       _hashAssistedFind = new HashAssistedFind{_list.begin(), _list.end()};
-   if (!flag)
-      _hashAssistedFind = nullptr;
+   }
+   if (!flag && _hashAssistedFind) {
       delete _hashAssistedFind;
       _hashAssistedFind = nullptr;
+   }
 }
 
 

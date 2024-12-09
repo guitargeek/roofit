@@ -21,7 +21,7 @@
 #include "RooArgSet.h"
 #include "RooCmdArg.h"
 #include "RooCurve.h"
-#include "RooFit/Detail/CodeSquashContext.h"
+#include "RooFit/CodegenContext.h"
 #include "RooFit/EvalContext.h"
 #include "RooGlobalFunc.h"
 
@@ -130,6 +130,8 @@ public:
     // downstream code, we set `normalisationSet` to nullptr if it is an empty set.
     return _fast ? _value : getValV(normalisationSet.empty() ? nullptr : &normalisationSet) ;
   }
+
+  double getVal(RooArgSet &&) const;
 
   virtual double getValV(const RooArgSet* normalisationSet = nullptr) const ;
 
@@ -337,9 +339,8 @@ public:
   static void logEvalError(const RooAbsReal* originator, const char* origName, const char* message, const char* serverValueString=nullptr) ;
   static void printEvalErrors(std::ostream&os=std::cout, Int_t maxPerNode=10000000) ;
   static Int_t numEvalErrors() ;
-  inline static Int_t numEvalErrorItems() { return _evalErrorList.size(); }
-
-  inline static auto evalErrorIter() { return _evalErrorList.begin(); }
+  static Int_t numEvalErrorItems();
+  static std::map<const RooAbsArg *, std::pair<std::string, std::list<RooAbsReal::EvalError>>>::iterator evalErrorIter();
 
   static void clearEvalErrorLog() ;
 
@@ -389,9 +390,6 @@ public:
   virtual void gradient(double *) const {
     if(!hasGradient()) throw std::runtime_error("RooAbsReal::gradient(double *) not implemented by this class!");
   }
-
-  virtual std::string
-  buildCallToAnalyticIntegral(Int_t code, const char *rangeName, RooFit::Detail::CodeSquashContext &ctx) const;
 
   // PlotOn with command list
   virtual RooPlot* plotOn(RooPlot* frame, RooLinkedList& cmdList) const ;
@@ -543,9 +541,6 @@ private:
    bool _selectComp = true;                                //! Component selection flag for RooAbsPdf::plotCompOn
    mutable RooFit::UniqueId<RooArgSet>::Value_t _lastNormSetId = RooFit::UniqueId<RooArgSet>::nullval; ///<!
 
-   static ErrorLoggingMode _evalErrorMode;
-   static std::map<const RooAbsArg *, std::pair<std::string, std::list<EvalError>>> _evalErrorList;
-   static Int_t _evalErrorCount;
    static bool _globalSelectComp; // Global activation switch for component selection
    static bool _hideOffset;       ///< Offset hiding flag
 

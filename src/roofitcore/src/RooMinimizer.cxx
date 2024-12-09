@@ -68,7 +68,6 @@ automatic PDF optimization.
 #include <iostream>
 #include <stdexcept> // logic_error
 
-ClassImp(RooMinimizer);
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Construct MINUIT interface to given function. Function can be anything,
@@ -404,10 +403,11 @@ int RooMinimizer::minos(const RooArgSet &minosParamList)
 
          // get list of parameters for Minos
          std::vector<unsigned int> paramInd;
+         RooArgList floatParams = _fcn->floatParams();
          for (RooAbsArg *arg : minosParamList) {
-            RooAbsArg *par = _fcn->GetFloatParamList()->find(arg->GetName());
+            RooAbsArg *par = floatParams.find(arg->GetName());
             if (par && !par->isConstant()) {
-               int index = _fcn->GetFloatParamList()->index(par);
+               int index = floatParams.index(par);
                paramInd.push_back(index);
             }
          }
@@ -509,32 +509,18 @@ RooFit::OwningPtr<RooFitResult> RooMinimizer::save(const char *userName, const c
    TString title = userTitle ? userTitle : Form("%s", _fcn->getFunctionTitle().c_str());
    auto fitRes = std::make_unique<RooFitResult>(name, title);
 
-   // Move eventual fixed parameters in floatList to constList
-   RooArgList saveConstList(*(_fcn->GetConstParamList()));
-   RooArgList saveFloatInitList(*(_fcn->GetInitFloatParamList()));
-   RooArgList saveFloatFinalList(*(_fcn->GetFloatParamList()));
-   for (std::size_t i = 0; i < _fcn->GetFloatParamList()->size(); i++) {
-      RooAbsArg *par = _fcn->GetFloatParamList()->at(i);
-      if (par->isConstant()) {
-         saveFloatInitList.remove(*saveFloatInitList.find(par->GetName()), true);
-         saveFloatFinalList.remove(*par);
-         saveConstList.add(*par);
-      }
-   }
-   saveConstList.sort();
+   fitRes->setConstParList(_fcn->constParams());
 
-   fitRes->setConstParList(saveConstList);
-   fitRes->setInitParList(saveFloatInitList);
-
-   double removeOffset = 0.;
    fitRes->setNumInvalidNLL(_fcn->GetNumInvalidNLL());
-   removeOffset = -_fcn->getOffset();
 
    fitRes->setStatus(_status);
    fitRes->setCovQual(_minimizer->CovMatrixStatus());
-   fitRes->setMinNLL(_result->fVal + removeOffset);
+   fitRes->setMinNLL(_result->fVal -_fcn->getOffset());
    fitRes->setEDM(_result->fEdm);
-   fitRes->setFinalParList(saveFloatFinalList);
+
+   fitRes->setInitParList(_fcn->initFloatParams());
+   fitRes->setFinalParList(_fcn->floatParams());
+
    if (!_extV) {
       fillCorrMatrix(*fitRes);
    } else {
@@ -602,19 +588,19 @@ void RooMinimizer::fillCorrMatrix(RooFitResult &fitRes)
 RooPlot *RooMinimizer::contour(RooRealVar &var1, RooRealVar &var2, double n1, double n2, double n3, double n4,
                                double n5, double n6, unsigned int npoints)
 {
-   RooArgList *params = _fcn->GetFloatParamList();
+   RooArgList params = _fcn->floatParams();
    RooArgList paramSave;
-   params->snapshot(paramSave);
+   params.snapshot(paramSave);
 
    // Verify that both variables are floating parameters of PDF
-   int index1 = _fcn->GetFloatParamList()->index(&var1);
+   int index1 = params.index(&var1);
    if (index1 < 0) {
       coutE(Minimization) << "RooMinimizer::contour(" << GetName() << ") ERROR: " << var1.GetName()
                           << " is not a floating parameter of " << _fcn->getFunctionName() << std::endl;
       return nullptr;
    }
 
-   int index2 = _fcn->GetFloatParamList()->index(&var2);
+   int index2 = params.index(&var2);
    if (index2 < 0) {
       coutE(Minimization) << "RooMinimizer::contour(" << GetName() << ") ERROR: " << var2.GetName()
                           << " is not a floating parameter of PDF " << _fcn->getFunctionName() << std::endl;
@@ -678,7 +664,7 @@ RooPlot *RooMinimizer::contour(RooRealVar &var1, RooRealVar &var2, double n1, do
    _minimizer->SetErrorDef(errdef);
 
    // restore parameter values
-   params->assign(paramSave);
+   params.assign(paramSave);
 
    return frame;
 }
@@ -691,7 +677,7 @@ void RooMinimizer::addParamsToProcessTimer()
 #ifdef ROOFIT_MULTIPROCESS
    // parameter indices for use in timing heat matrix
    std::vector<std::string> parameter_names;
-   for (auto &&parameter : *_fcn->GetFloatParamList()) {
+   for (RooAbsArg *parameter : _fcn->floatParams()) {
       parameter_names.push_back(parameter->GetName());
       if (_cfg.verbose) {
          coutI(Minimization) << "parameter name: " << parameter_names.back() << std::endl;
@@ -763,9 +749,11 @@ RooFit::OwningPtr<RooFitResult> RooMinimizer::lastMinuitFit()
    RooArgList constPars("constPars");
    RooArgList floatPars("floatPars");
 
+   const RooArgList floatParsFromFcn = _fcn->floatParams();
+
    for (unsigned int i = 0; i < _fcn->getNDim(); ++i) {
 
-      TString varName(_fcn->GetFloatParamList()->at(i)->GetName());
+      TString varName(floatParsFromFcn.at(i)->GetName());
       bool isConst(_result->isParameterFixed(i));
 
       double xlo = _config.ParSettings(i).LowerLimit();
@@ -979,6 +967,15 @@ void RooMinimizer::initMinimizer()
    _minimizer = std::unique_ptr<ROOT::Math::Minimizer>(_config.CreateMinimizer());
    _minimizer->SetFunction(*getMultiGenFcn());
    _minimizer->SetVariables(_config.ParamsSettings().begin(), _config.ParamsSettings().end());
+
+   if (_cfg.setInitialCovariance) {
+      std::vector<double> v;
+      for (std::size_t i = 0; i < _fcn->getNDim(); ++i) {
+         RooRealVar &param = _fcn->floatableParam(i);
+         v.push_back(param.getError() * param.getError());
+      }
+      _minimizer->SetCovarianceDiag(v, v.size());
+   }
 }
 
 bool RooMinimizer::updateMinimizerOptions(bool canDifferentMinim)
@@ -1178,4 +1175,15 @@ double RooMinimizer::FitResult::upperError(unsigned int i) const
 bool RooMinimizer::FitResult::isParameterFixed(unsigned int ipar) const
 {
    return fFixedParams.find(ipar) != fFixedParams.end();
+}
+
+void RooMinimizer::FitResult::GetCovarianceMatrix(TMatrixDSym &covs) const
+{
+   const size_t nParams = fParams.size();
+   covs.ResizeTo(nParams, nParams);
+   for (std::size_t ic = 0; ic < nParams; ic++) {
+      for (std::size_t ii = 0; ii < nParams; ii++) {
+         covs(ic, ii) = covMatrix(fCovMatrix, ic, ii);
+      }
+   }
 }

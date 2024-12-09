@@ -26,9 +26,10 @@ class TDirectory;
 #include "RooAbsData.h"
 #include "RooDirItem.h"
 
-#include <string_view>
+#include <ROOT/RConfig.hxx> // for R__DEPRECATED
 
 #include <list>
+#include <string_view>
 
 class RooDataSet : public RooAbsData, public RooDirItem {
 public:
@@ -43,9 +44,14 @@ public:
 
     // Constructor for subset of existing dataset
   RooDataSet(RooStringView name, RooStringView title, RooDataSet *data, const RooArgSet& vars,
-             const char *cuts=nullptr, const char* wgtVarName=nullptr);
+             const char *cuts=nullptr, const char* wgtVarName=nullptr)
+#ifndef ROOFIT_BUILDS_ITSELF
+  R__DEPRECATED(6,38, "Use RooAbsData::reduce(), or if you need to change the weight column, the universal constructor with the Import(), Cut(), and WeightVar() arguments.")
+#endif
+  ;
   RooDataSet(RooStringView name, RooStringView title, RooDataSet *data, const RooArgSet& vars,
-             const RooFormulaVar& cutVar, const char* wgtVarName=nullptr) ;
+             const RooFormulaVar& cutVar, const char* wgtVarName=nullptr)
+  R__DEPRECATED(6,38, "Use RooAbsData::reduce(), or if you need to change the weight column, the universal constructor with the Import(), Cut(), and WeightVar() arguments.");
 
   RooDataSet(RooDataSet const & other, const char* newname=nullptr) ;
   TObject* Clone(const char* newname = "") const override {
@@ -104,7 +110,6 @@ public:
   bool merge(std::list<RooDataSet*> dsetList) ;
 
   virtual RooAbsArg* addColumn(RooAbsArg& var, bool adjustRange=true) ;
-  virtual RooArgSet* addColumns(const RooArgList& varList) ;
 
   void printMultiline(std::ostream& os, Int_t contents, bool verbose=false, TString indent="") const override;
   void printArgs(std::ostream& os) const override;

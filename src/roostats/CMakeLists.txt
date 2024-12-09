@@ -49,7 +49,6 @@ set(sources_headers
     RooStats/MCMCInterval.h
     RooStats/MCMCIntervalPlot.h
     RooStats/MetropolisHastings.h
-    RooStats/MinNLLTestStat.h
     RooStats/ModelConfig.h
     RooStats/NeymanConstruction.h
     RooStats/NumberCountingPdfFactory.h
@@ -60,7 +59,6 @@ set(sources_headers
     RooStats/ProfileInspector.h
     RooStats/ProfileLikelihoodCalculator.h
     RooStats/ProfileLikelihoodTestStat.h
-    RooStats/ProofConfig.h
     RooStats/ProposalFunction.h
     RooStats/ProposalHelper.h
     RooStats/RatioOfProfiledLikelihoodsTestStat.h
@@ -75,7 +73,6 @@ set(sources_headers
     RooStats/TestStatSampler.h
     RooStats/ToyMCImportanceSampler.h
     RooStats/ToyMCSampler.h
-    RooStats/ToyMCStudy.h
     RooStats/UniformProposal.h
     RooStats/UpperLimitMCSModule.h
 )
@@ -127,13 +124,11 @@ set(sources_cxx
     src/SPlot.cxx
     src/ToyMCImportanceSampler.cxx
     src/ToyMCSampler.cxx
-    src/ToyMCStudy.cxx
     src/UniformProposal.cxx
     src/UpperLimitMCSModule.cxx
 )
 
 target_sources(RooStats PRIVATE ${sources_headers} ${sources_cxx})
-set_target_properties(RooStats PROPERTIES PUBLIC_HEADER "${sources_headers}")
 
 target_include_directories(RooStats PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
@@ -170,8 +165,8 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libRooStats_rdict.pcm
 # Install the libraries and header files.
 install(TARGETS RooStats
         LIBRARY DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
 )
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 if(testing)
   add_subdirectory(test)

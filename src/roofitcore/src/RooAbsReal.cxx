@@ -51,7 +51,7 @@
 #include "RooDataSet.h"
 #include "RooDerivative.h"
 #include "RooFirstMoment.h"
-#include "RooFit/Detail/BatchModeDataHelpers.h"
+#include "RooFit/BatchModeDataHelpers.h"
 #include "RooFit/Evaluator.h"
 #include "RooFitResult.h"
 #include "RooFormulaVar.h"
@@ -116,9 +116,9 @@ public:
       _arg->recursiveRedirectServers(RooArgList{var});
       _evaluator = std::make_unique<RooFit::Evaluator>(*_arg);
       std::stack<std::vector<double>>{}.swap(_vectorBuffers);
-      auto dataSpans =
-         RooFit::Detail::BatchModeDataHelpers::getDataSpans(data, "", nullptr, /*skipZeroWeights=*/false,
-                                                            /*takeGlobalObservablesFromData=*/true, _vectorBuffers);
+      auto dataSpans = RooFit::BatchModeDataHelpers::getDataSpans(data, "", nullptr, /*skipZeroWeights=*/false,
+                                                                   /*takeGlobalObservablesFromData=*/true,
+                                                                   _vectorBuffers);
       for (auto const& item : dataSpans) {
          _evaluator->setInput(item.first->GetName(), item.second, false);
       }
@@ -158,19 +158,37 @@ private:
    std::stack<std::vector<double>> _vectorBuffers;
 };
 
+struct EvalErrorData {
+   using ErrorList = std::map<const RooAbsArg *, std::pair<std::string, std::list<RooAbsReal::EvalError>>>;
+   RooAbsReal::ErrorLoggingMode mode = RooAbsReal::PrintErrors;
+   int count = 0;
+   ErrorList errorList;
+};
+
+EvalErrorData &evalErrorData()
+{
+   static EvalErrorData data;
+   return data;
+}
+
 } // namespace
 
-ClassImp(RooAbsReal)
+Int_t RooAbsReal::numEvalErrorItems()
+{
+   return evalErrorData().errorList.size();
+}
+
+EvalErrorData::ErrorList::iterator RooAbsReal::evalErrorIter()
+{
+   return evalErrorData().errorList.begin();
+}
+
 
 bool RooAbsReal::_globalSelectComp = false;
 bool RooAbsReal::_hideOffset = true ;
 
 void RooAbsReal::setHideOffset(bool flag) { _hideOffset = flag ; }
 bool RooAbsReal::hideOffset() { return _hideOffset ; }
-
-RooAbsReal::ErrorLoggingMode RooAbsReal::_evalErrorMode = RooAbsReal::PrintErrors ;
-Int_t RooAbsReal::_evalErrorCount = 0 ;
-std::map<const RooAbsArg*,std::pair<std::string,std::list<RooAbsReal::EvalError> > > RooAbsReal::_evalErrorList ;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -360,7 +378,7 @@ Int_t RooAbsReal::getAnalyticalIntegral(RooArgSet& /*integSet*/, RooArgSet& /*an
 
 double RooAbsReal::analyticalIntegralWN(Int_t code, const RooArgSet* normSet, const char* rangeName) const
 {
-//   cout << "RooAbsReal::analyticalIntegralWN(" << GetName() << ") code = " << code << " normSet = " << (normSet?*normSet:RooArgSet()) << std::endl ;
+//   std::cout << "RooAbsReal::analyticalIntegralWN(" << GetName() << ") code = " << code << " normSet = " << (normSet?*normSet:RooArgSet()) << std::endl ;
   if (code==0) return getVal(normSet) ;
   return analyticalIntegral(code,rangeName) ;
 }
@@ -998,27 +1016,18 @@ TH1 *RooAbsReal::fillHistogram(TH1 *hist, const RooArgList &plotVars,
     zvar= dynamic_cast<RooRealVar*>(plotClones.find(plotVars.at(2)->GetName()));
     zaxis= hist->GetZaxis();
     assert(nullptr != zvar && nullptr != zaxis);
-    if (scaleForDensity) {
-      scaleFactor*= (zaxis->GetXmax() - zaxis->GetXmin())/zbins;
-    }
     // fall through to next case...
   case 2:
     ybins= hist->GetNbinsY();
     yvar= dynamic_cast<RooRealVar*>(plotClones.find(plotVars.at(1)->GetName()));
     yaxis= hist->GetYaxis();
     assert(nullptr != yvar && nullptr != yaxis);
-    if (scaleForDensity) {
-      scaleFactor*= (yaxis->GetXmax() - yaxis->GetXmin())/ybins;
-    }
     // fall through to next case...
   case 1:
     xbins= hist->GetNbinsX();
     xvar= dynamic_cast<RooRealVar*>(plotClones.find(plotVars.at(0)->GetName()));
     xaxis= hist->GetXaxis();
     assert(nullptr != xvar && nullptr != xaxis);
-    if (scaleForDensity) {
-      scaleFactor*= (xaxis->GetXmax() - xaxis->GetXmin())/xbins;
-    }
     break;
   default:
     coutE(InputArguments) << ClassName() << "::" << GetName() << ":fillHistogram: cannot fill histogram with "
@@ -1056,7 +1065,13 @@ TH1 *RooAbsReal::fillHistogram(TH1 *hist, const RooArgList &plotVars,
       break;
     }
 
-    double result= scaleFactor*projected->getVal();
+    // Bin volume scaling
+    double scaleFactorBin = scaleFactor;
+    scaleFactorBin *= scaleForDensity && hdim > 2 ? hist->GetZaxis()->GetBinWidth(zbin) : 1.0;
+    scaleFactorBin *= scaleForDensity && hdim > 1 ? hist->GetYaxis()->GetBinWidth(ybin) : 1.0;
+    scaleFactorBin *= scaleForDensity && hdim > 0 ? hist->GetXaxis()->GetBinWidth(xbin) : 1.0;
+
+    double result= scaleFactorBin * projected->getVal();
     if (RooAbsReal::numEvalErrors()>0) {
       coutW(Plotting) << "WARNING: Function evaluation error(s) at coordinates [x]=" << xvar->getVal() ;
       if (hdim==2) ccoutW(Plotting) << " [y]=" << yvar->getVal() ;
@@ -1393,8 +1408,7 @@ TH1* RooAbsReal::createHistogram(const char *name, const RooAbsRealLValue& xvar,
 
   double scaleFactor(1.0) ;
   if (doExtended) {
-    scaleFactor = pdfSelf->expectedEvents(vars) ;
-    doScaling=false ;
+     scaleFactor = pdfSelf->expectedEvents(vars);
   }
 
   fillHistogram(histo,vars,scaleFactor,intObs,doScaling,projObs,false) ;
@@ -1990,31 +2004,14 @@ RooPlot* RooAbsReal::plotOn(RooPlot *frame, PlotOpt o) const
     if (projDataNeededVars->size() < o.projData->get()->size()) {
 
       // Determine if there are any slice variables in the projection set
-        std::unique_ptr<RooArgSet> sliceDataSet{sliceSet.selectCommon(*o.projData->get())};
-      TString cutString ;
-      if (!sliceDataSet->empty()) {
-   bool first(true) ;
-   for(RooAbsArg * sliceVar : *sliceDataSet) {
-     if (!first) {
-       cutString.Append("&&") ;
-     } else {
-       first=false ;
-     }
+      RooArgSet sliceDataSet;
+      sliceSet.selectCommon(*o.projData->get(), sliceDataSet);
+      std::string cutString = RooFit::Detail::makeSliceCutString(sliceDataSet);
 
-     RooAbsRealLValue* real ;
-     RooAbsCategoryLValue* cat ;
-     if ((real = dynamic_cast<RooAbsRealLValue*>(sliceVar))) {
-       cutString.Append(Form("%s==%f",real->GetName(),real->getVal())) ;
-     } else if ((cat = dynamic_cast<RooAbsCategoryLValue*>(sliceVar))) {
-       cutString.Append(Form("%s==%d",cat->GetName(),cat->getCurrentIndex())) ;
-     }
-   }
-      }
-
-      if (!cutString.IsNull()) {
+      if (!cutString.empty()) {
        coutI(Plotting) << "RooAbsReal::plotOn(" << GetName() << ") reducing given projection dataset to entries with " << cutString << std::endl ;
       }
-      projDataSelOwned = std::unique_ptr<RooAbsData>{const_cast<RooAbsData*>(o.projData)->reduce(*projDataNeededVars, cutString.IsNull() ? nullptr : cutString)};
+      projDataSelOwned = std::unique_ptr<RooAbsData>{projDataSel->reduce(RooFit::SelectVars(*projDataNeededVars), RooFit::Cut(cutString.c_str()))};
       projDataSel = projDataSelOwned.get();
       coutI(Plotting) << "RooAbsReal::plotOn(" << GetName()
             << ") only the following components of the projection data will be used: " << *projDataNeededVars << std::endl ;
@@ -2250,7 +2247,7 @@ RooPlot* RooAbsReal::plotAsymOn(RooPlot *frame, const RooAbsCategoryLValue& asym
   }
 
 
-  // Take out data-projected dependens from projectedVars
+  // Take out data-projected dependents from projectedVars
   RooArgSet* projDataNeededVars = nullptr ;
   if (o.projData) {
     projDataNeededVars = projectedVars.selectCommon(projDataVars);
@@ -2329,31 +2326,13 @@ RooPlot* RooAbsReal::plotAsymOn(RooPlot *frame, const RooAbsCategoryLValue& asym
       // Determine if there are any slice variables in the projection set
       RooArgSet sliceDataSet;
       sliceSet.selectCommon(*o.projData->get(), sliceDataSet);
-      TString cutString ;
-      if (!sliceDataSet.empty()) {
-   bool first(true) ;
-   for(RooAbsArg * sliceVar : sliceDataSet) {
-     if (!first) {
-       cutString.Append("&&") ;
-     } else {
-       first=false ;
-     }
+      std::string cutString = RooFit::Detail::makeSliceCutString(sliceDataSet);
 
-     RooAbsRealLValue* real ;
-     RooAbsCategoryLValue* cat ;
-     if ((real = dynamic_cast<RooAbsRealLValue*>(sliceVar))) {
-       cutString.Append(Form("%s==%f",real->GetName(),real->getVal())) ;
-     } else if ((cat = dynamic_cast<RooAbsCategoryLValue*>(sliceVar))) {
-       cutString.Append(Form("%s==%d",cat->GetName(),cat->getCurrentIndex())) ;
-     }
-   }
-      }
-
-      if (!cutString.IsNull()) {
+      if (!cutString.empty()) {
    coutI(Plotting) << "RooAbsReal::plotAsymOn(" << GetName()
          << ") reducing given projection dataset to entries with " << cutString << std::endl ;
       }
-      projDataSelOwned = std::unique_ptr<RooAbsData>{const_cast<RooAbsData*>(o.projData)->reduce(*projDataNeededVars,cutString.IsNull() ? nullptr : cutString)};
+      projDataSelOwned = std::unique_ptr<RooAbsData>{projDataSel->reduce(RooFit::SelectVars(*projDataNeededVars),RooFit::Cut(cutString.c_str()))};
       projDataSel = projDataSelOwned.get();
       coutI(Plotting) << "RooAbsReal::plotAsymOn(" << GetName()
             << ") only the following components of the projection data will be used: " << *projDataNeededVars << std::endl ;
@@ -3388,12 +3367,12 @@ double RooAbsReal::maxVal(Int_t /*code*/) const
 
 void RooAbsReal::logEvalError(const RooAbsReal* originator, const char* origName, const char* message, const char* serverValueString)
 {
-  if (_evalErrorMode==Ignore) {
+  if (evalErrorData().mode == Ignore) {
     return ;
   }
 
-  if (_evalErrorMode==CountErrors) {
-    _evalErrorCount++ ;
+  if (evalErrorData().mode == CountErrors) {
+    evalErrorData().count++ ;
     return ;
   }
 
@@ -3411,14 +3390,15 @@ void RooAbsReal::logEvalError(const RooAbsReal* originator, const char* origName
     ee.setServerValues(serverValueString) ;
   }
 
-  if (_evalErrorMode==PrintErrors) {
+  if (evalErrorData().mode == PrintErrors) {
    oocoutE(nullptr,Eval) << "RooAbsReal::logEvalError(" << "<STATIC>" << ") evaluation error, " << std::endl
          << " origin       : " << origName << std::endl
          << " message      : " << ee._msg << std::endl
          << " server values: " << ee._srvval << std::endl ;
-  } else if (_evalErrorMode==CollectErrors) {
-    _evalErrorList[originator].first = origName ;
-    _evalErrorList[originator].second.push_back(ee) ;
+  } else if (evalErrorData().mode == CollectErrors) {
+    auto &evalErrorList = evalErrorData().errorList[originator];
+    evalErrorList.first = origName ;
+    evalErrorList.second.push_back(ee) ;
   }
 
 
@@ -3443,12 +3423,12 @@ void RooAbsReal::logEvalError(const RooAbsReal* originator, const char* origName
 
 void RooAbsReal::logEvalError(const char* message, const char* serverValueString) const
 {
-  if (_evalErrorMode==Ignore) {
+  if (evalErrorData().mode == Ignore) {
     return ;
   }
 
-  if (_evalErrorMode==CountErrors) {
-    _evalErrorCount++ ;
+  if (evalErrorData().mode == CountErrors) {
+    evalErrorData().count++ ;
     return ;
   }
 
@@ -3485,16 +3465,17 @@ void RooAbsReal::logEvalError(const char* message, const char* serverValueString
   std::ostringstream oss2 ;
   printStream(oss2,kName|kClassName|kArgs,kInline)  ;
 
-  if (_evalErrorMode==PrintErrors) {
+  if (evalErrorData().mode == PrintErrors) {
    coutE(Eval) << "RooAbsReal::logEvalError(" << GetName() << ") evaluation error, " << std::endl
           << " origin       : " << oss2.str() << std::endl
           << " message      : " << ee._msg << std::endl
           << " server values: " << ee._srvval << std::endl ;
-  } else if (_evalErrorMode==CollectErrors) {
-    if (_evalErrorList[this].second.size() >= 2048) {
+  } else if (evalErrorData().mode == CollectErrors) {
+    auto &evalErrorList = evalErrorData().errorList[this];
+    if (evalErrorList.second.size() >= 2048) {
        // avoid overflowing the error list, so if there are very many, print
        // the oldest one first, and pop it off the list
-       const EvalError& oee = _evalErrorList[this].second.front();
+       const EvalError& oee = evalErrorList.second.front();
        // print to debug stream, since these would normally be suppressed, and
        // we do not want to increase the error count in the message service...
        ccoutD(Eval) << "RooAbsReal::logEvalError(" << GetName()
@@ -3502,10 +3483,10 @@ void RooAbsReal::logEvalError(const char* message, const char* serverValueString
                    << " origin       : " << oss2.str() << std::endl
                    << " message      : " << oee._msg << std::endl
                    << " server values: " << oee._srvval << std::endl ;
-       _evalErrorList[this].second.pop_front();
+       evalErrorList.second.pop_front();
     }
-    _evalErrorList[this].first = oss2.str() ;
-    _evalErrorList[this].second.push_back(ee) ;
+    evalErrorList.first = oss2.str() ;
+    evalErrorList.second.push_back(ee) ;
   }
 
   inLogEvalError = false ;
@@ -3520,12 +3501,12 @@ void RooAbsReal::logEvalError(const char* message, const char* serverValueString
 
 void RooAbsReal::clearEvalErrorLog()
 {
-  if (_evalErrorMode==PrintErrors) {
+  if (evalErrorData().mode == PrintErrors) {
     return ;
-  } else if (_evalErrorMode==CollectErrors) {
-    _evalErrorList.clear() ;
+  } else if (evalErrorData().mode == CollectErrors) {
+    evalErrorData().errorList.clear() ;
   } else {
-    _evalErrorCount = 0 ;
+    evalErrorData().count = 0 ;
   }
 }
 
@@ -3558,38 +3539,41 @@ std::list<double>* RooAbsReal::plotSamplingHint(RooAbsRealLValue& /*obs*/, doubl
 /// per source of errors. A truncation message is shown if there were more errors logged
 /// than shown.
 
-void RooAbsReal::printEvalErrors(std::ostream& os, Int_t maxPerNode)
+void RooAbsReal::printEvalErrors(std::ostream &os, Int_t maxPerNode)
 {
-  if (_evalErrorMode == CountErrors) {
-    os << _evalErrorCount << " errors counted" << std::endl ;
-  }
-
-  if (maxPerNode<0) return ;
-
-  for(auto iter = _evalErrorList.begin();iter!=_evalErrorList.end() ; ++iter) {
-    if (maxPerNode==0) {
-
-      // Only print node name with total number of errors
-      os << iter->second.first ;
-      //iter->first->printStream(os,kName|kClassName|kArgs,kInline)  ;
-      os << " has " << iter->second.second.size() << " errors" << std::endl ;
-
-    } else {
-
-      // Print node name and details of 'maxPerNode' errors
-      os << iter->second.first << std::endl ;
-      //iter->first->printStream(os,kName|kClassName|kArgs,kSingleLine) ;
-
-      Int_t i(0) ;
-      for(auto iter2 = iter->second.second.begin();iter2!=iter->second.second.end() ; ++iter2, i++) {
-   os << "     " << iter2->_msg << " @ " << iter2->_srvval << std::endl ;
-   if (i>maxPerNode) {
-     os << "    ... (remaining " << iter->second.second.size() - maxPerNode << " messages suppressed)" << std::endl ;
-     break ;
+   if (evalErrorData().mode == CountErrors) {
+      os << evalErrorData().count << " errors counted" << std::endl;
    }
+
+   if (maxPerNode < 0)
+      return;
+
+   for (auto const &item : evalErrorData().errorList) {
+      if (maxPerNode == 0) {
+
+         // Only print node name with total number of errors
+         os << item.second.first;
+         // item.first->printStream(os,kName|kClassName|kArgs,kInline)  ;
+         os << " has " << item.second.second.size() << " errors" << std::endl;
+
+      } else {
+
+         // Print node name and details of 'maxPerNode' errors
+         os << item.second.first << std::endl;
+         // item.first->printStream(os,kName|kClassName|kArgs,kSingleLine) ;
+
+         Int_t i(0);
+         for (auto const &item2 : item.second.second) {
+            os << "     " << item2._msg << " @ " << item2._srvval << std::endl;
+            if (i > maxPerNode) {
+               os << "    ... (remaining " << item.second.second.size() - maxPerNode << " messages suppressed)"
+                  << std::endl;
+               break;
+            }
+            i++;
+         }
       }
-    }
-  }
+   }
 }
 
 
@@ -3599,15 +3583,16 @@ void RooAbsReal::printEvalErrors(std::ostream& os, Int_t maxPerNode)
 
 Int_t RooAbsReal::numEvalErrors()
 {
-  if (_evalErrorMode==CountErrors) {
-    return _evalErrorCount ;
-  }
+   auto &evalErrors = evalErrorData();
+   if (evalErrors.mode == CountErrors) {
+      return evalErrors.count;
+   }
 
-  Int_t ntot(0) ;
-  for(auto const& elem : _evalErrorList) {
-    ntot += elem.second.second.size() ;
-  }
-  return ntot ;
+   Int_t ntot(0);
+   for (auto const &elem : evalErrors.errorList) {
+      ntot += elem.second.second.size();
+   }
+   return ntot;
 }
 
 
@@ -4276,7 +4261,7 @@ RooFit::OwningPtr<RooAbsReal> RooAbsReal::createChi2(RooDataSet &data, const Roo
 
 RooAbsReal::ErrorLoggingMode RooAbsReal::evalErrorLoggingMode()
 {
-  return _evalErrorMode ;
+  return evalErrorData().mode  ;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -4290,7 +4275,7 @@ RooAbsReal::ErrorLoggingMode RooAbsReal::evalErrorLoggingMode()
 
 void RooAbsReal::setEvalErrorLoggingMode(RooAbsReal::ErrorLoggingMode m)
 {
-  _evalErrorMode =  m;
+  evalErrorData().mode = m;
 }
 
 
@@ -4389,23 +4374,6 @@ void RooAbsReal::doEval(RooFit::EvalContext & ctx) const
   }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// This function defines the analytical integral translation for the class.
-///
-/// \param[in] code The code that decides the integrands.
-/// \param[in] rangeName Name of the normalization range.
-/// \param[in] ctx An object to manage auxiliary information for code-squashing.
-///
-/// \returns The representative code string of the integral for the given object.
-std::string RooAbsReal::buildCallToAnalyticIntegral(Int_t /* code */, const char * /* rangeName */,
-                                                    RooFit::Detail::CodeSquashContext & /*ctx*/) const
-{
-   std::stringstream errorMsg;
-   errorMsg << "An analytical integral function for class \"" << ClassName() << "\" has not yet been implemented.";
-   coutE(Minimization) << errorMsg.str() << std::endl;
-   throw std::runtime_error(errorMsg.str().c_str());
-}
-
 double RooAbsReal::_DEBUG_getVal(const RooArgSet* normalisationSet) const {
 
   const bool tmpFast = _fast;
@@ -4467,3 +4435,29 @@ void RooAbsReal::enableOffsetting(bool flag)
 
 
 RooAbsReal::Ref::Ref(double val) : _ref{RooFit::RooConst(val)} {}
+
+////////////////////////////////////////////////////////////////////////////////
+/// Calling RooAbsReal::getVal() with an r-value reference is a common
+/// performance trap, because this usually happens when implicitly constructing
+/// the RooArgSet to be used as the parameter (for example, in calls like
+/// `pdf.getVal(x)`).
+///
+/// Creating the RooArgSet can cause quite some overhead, especially when the
+/// evaluated object is just a simple variable. Even worse, many RooFit objects
+/// internally cache information using the uniqueId() of the normalization set
+/// as the key. So by constructing normalization sets in place, RooFits caching
+/// logic is broken.
+///
+/// To avoid these kind of problems, getVal() will just throw an error when
+/// it's called with an r-value reference. This also catches the cases where
+/// one uses it in Python, implicitly creating the normalization set from a
+/// Python list or set.
+double RooAbsReal::getVal(RooArgSet &&) const
+{
+   std::stringstream errMsg;
+   errMsg << "calling RooAbsReal::getVal() with r-value references to the normalization set is not allowed, because "
+             "it breaks RooFits caching logic and potentially introduces significant overhead. Please explicitly "
+             "create the RooArgSet outside the call to getVal().";
+   coutF(Eval) << errMsg.str() << std::endl;
+   throw std::runtime_error(errMsg.str());
+}

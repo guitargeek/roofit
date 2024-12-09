@@ -44,7 +44,7 @@ set(sources_headers
     RooAbsCategoryLValue.h
     RooAbsCollection.h
     RooAbsData.h
-    RooAbsDataFiller.h
+    RooAbsDataHelper.h
     RooAbsDataStore.h
     RooAbsFunc.h
     RooAbsGenContext.h
@@ -112,11 +112,12 @@ set(sources_headers
     RooFactoryWSTool.h
     RooFirstMoment.h
     RooFit.h
+    RooFit/CodegenContext.h
     RooFit/Config.h
-    RooFit/Detail/BatchModeDataHelpers.h
-    RooFit/Detail/CodeSquashContext.h
     RooFit/Detail/MathFuncs.h
     RooFit/Detail/NormalizationHelpers.h
+    RooFit/Detail/RooNLLVarNew.h
+    RooFit/Detail/RooNormalizedPdf.h
     RooFit/EvalContext.h
     RooFit/Evaluator.h
     RooFit/Floats.h
@@ -129,8 +130,8 @@ set(sources_headers
     RooFit/TestStatistics/RooSubsidiaryL.h
     RooFit/TestStatistics/RooSumL.h
     RooFit/TestStatistics/RooUnbinnedL.h
-    RooFit/TestStatistics/buildLikelihood.h
     RooFit/TestStatistics/SharedOffset.h
+    RooFit/TestStatistics/buildLikelihood.h
     RooFitLegacy/RooCatTypeLegacy.h
     RooFitLegacy/RooCategorySharedProperties.h
     RooFitLegacy/RooTreeData.h
@@ -186,7 +187,6 @@ set(sources_headers
     RooProduct.h
     RooProfileLL.h
     RooProjectedPdf.h
-    RooProofDriverSelector.h
     RooPullVar.h
     RooQuasiRandomGenerator.h
     RooRandom.h
@@ -255,7 +255,7 @@ set(sources_cxx
     src/RooAbsCategoryLValue.cxx
     src/RooAbsCollection.cxx
     src/RooAbsData.cxx
-    src/RooAbsDataFiller.cxx
+    src/RooAbsDataHelper.cxx
     src/RooAbsDataStore.cxx
     src/RooAbsFunc.cxx
     src/RooAbsGenContext.cxx
@@ -288,7 +288,6 @@ set(sources_cxx
     src/RooBinning.cxx
     src/RooBinningCategory.cxx
     src/RooBrentRootFinder.cxx
-    src/RooCacheManager.cxx
     src/RooCachedPdf.cxx
     src/RooCachedReal.cxx
     src/RooCategory.cxx
@@ -325,7 +324,7 @@ set(sources_cxx
     src/RooFFTConvPdf.cxx
     src/RooFactoryWSTool.cxx
     src/RooFirstMoment.cxx
-    src/RooFit/Detail/CodeSquashContext.cxx
+    src/RooFit/CodegenContext.cxx
     src/RooFit/EvalContext.cxx
     src/RooFit/Evaluator.cxx
     src/RooFitImplHelpers.cxx
@@ -390,7 +389,6 @@ set(sources_cxx
     src/RooProduct.cxx
     src/RooProfileLL.cxx
     src/RooProjectedPdf.cxx
-    src/RooProofDriverSelector.cxx
     src/RooPullVar.cxx
     src/RooQuasiRandomGenerator.cxx
     src/RooRandom.cxx
@@ -448,7 +446,6 @@ set(sources_cxx
 )
 
 target_sources(RooFitCore PRIVATE ${sources_headers} ${sources_cxx})
-set_target_properties(RooFitCore PROPERTIES PUBLIC_HEADER "${sources_headers}")
 
 target_include_directories(RooFitCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
@@ -468,7 +465,6 @@ target_link_libraries(RooFitCore PUBLIC
     MathCore
     Foam
     Smatrix
-    TestSupport
     ${EXTRA_DEPENDENCIES}
 )
 
@@ -486,8 +482,8 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libRooFitCore_rdict.pcm
 # Install the libraries and header files.
 install(TARGETS RooFitCore
         LIBRARY DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
 )
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 # The following definitions are PUBLIC so they can also be used in ROOT-internal tests
 
@@ -505,6 +501,10 @@ endif()
 
 if(fftw3)
   target_compile_definitions(RooFitCore PUBLIC ROOFIT_MATH_FFTW3)
+endif()
+
+if(clad)
+  target_compile_definitions(RooFitCore PUBLIC ROOFIT_CLAD)
 endif()
 
 # To avoid deprecation warnings when including old test statistics headers.

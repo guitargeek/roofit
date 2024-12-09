@@ -1,3 +1,5 @@
+/// \cond ROOFIT_INTERNAL
+
 /*****************************************************************************
  * Project: RooFit                                                           *
  * Package: RooFitCore                                                       *
@@ -45,8 +47,11 @@ public:
    void evaluateGradient(const double *x, double *out) const;
 
 private:
-   RooAbsReal *_funct;
+   RooAbsReal *_funct = nullptr;
    std::unique_ptr<ROOT::Math::IBaseFunctionMultiDim> _multiGenFcn;
+   mutable std::vector<double> _gradientOutput;
 };
 
 #endif
+
+/// \endcond

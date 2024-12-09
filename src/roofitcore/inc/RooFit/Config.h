@@ -17,8 +17,6 @@
 // memory safe.
 // #define ROOFIT_MEMORY_SAFE_INTERFACES
 
-#include <ROOT/RConfig.hxx>
-
 #include <memory>
 
 namespace RooFit {
@@ -60,11 +58,5 @@ OwningPtr<T> makeOwningPtr(std::unique_ptr<U> &&ptr)
 }
 
 } // namespace RooFit
-
-// Define required deprecation macros if the ROOT version that we build RooFit
-// against doesn't have it.
-#ifndef _R__DEPRECATED_636
-# define _R__DEPRECATED_636(REASON) _R__DEPRECATED_LATER(REASON)
-#endif
 
 #endif

@@ -63,7 +63,6 @@ the following replacements should be used:
 #include <functional>
 #include <memory>
 
-ClassImp(RooAbsCategory);
 
 /// A category state to signify an invalid category. The category name is empty,
 /// the index is the minimal int.
@@ -285,7 +284,7 @@ void RooAbsCategory::clearTypes()
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Find the index number corresponding to the state name.
-/// \see hasLabel() for checking if a given label has been defined.
+/// See: hasLabel() for checking if a given label has been defined.
 /// \return Index of the category or std::numeric_limits<int>::min() on failure.
 RooAbsCategory::value_type RooAbsCategory::lookupIndex(const std::string& stateName) const {
   const auto item = stateNames().find(stateName);

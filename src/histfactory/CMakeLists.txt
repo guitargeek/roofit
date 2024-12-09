@@ -59,7 +59,6 @@ set(sources_cxx
     src/HistFactoryNavigation.cxx
     src/HistRef.cxx
     src/HistoToWorkspaceFactoryFast.cxx
-    src/JSONTool.cxx
     src/LinInterpVar.cxx
     src/MakeModelAndMeasurementsFast.cxx
     src/Measurement.cxx
@@ -73,7 +72,6 @@ set(sources_cxx
 )
 
 target_sources(HistFactory PRIVATE ${sources_headers} ${sources_cxx})
-set_target_properties(HistFactory PROPERTIES PUBLIC_HEADER "${sources_headers}")
 
 target_include_directories(HistFactory PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
@@ -110,8 +108,8 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libHistFactory_rdict.pcm
 # Install the libraries and header files.
 install(TARGETS HistFactory
         LIBRARY DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
 )
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 # For recent clang, this can facilitate auto-vectorisation.
 # In RooFit, the errno side effect is not needed, anyway:
@@ -124,12 +122,7 @@ endif()
 # can't build hist2workspace without xml.
 if(xml)
   ROOT_EXECUTABLE(hist2workspace hist2workspace.cxx LIBRARIES HistFactory)
-
-  #---Createhist2workspaceCommandLineOptions------------------------------------------------------------------
-  generateHeader(hist2workspace
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/hist2workspace-argparse.py
-    ${CMAKE_BINARY_DIR}/ginclude/hist2workspaceCommandLineOptionsHelp.h
-  )
+  target_compile_definitions(HistFactory PUBLIC HISTFACTORY_XML)
 endif()
 
 if(MSVC)
@@ -145,5 +138,5 @@ install(FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${prepareHistFactory_script}
                 DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(testing)
-  #add_subdirectory(test)
+  add_subdirectory(test)
 endif()
