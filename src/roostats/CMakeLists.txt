@@ -133,7 +133,6 @@ set(sources_cxx
 )
 
 target_sources(RooStats PRIVATE ${sources_headers} ${sources_cxx})
-set_target_properties(RooStats PROPERTIES PUBLIC_HEADER "${sources_headers}")
 
 target_include_directories(RooStats PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
@@ -170,8 +169,8 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libRooStats_rdict.pcm
 # Install the libraries and header files.
 install(TARGETS RooStats
         LIBRARY DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
 )
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 if(testing)
   add_subdirectory(test)

@@ -73,7 +73,6 @@ set(sources_cxx
 )
 
 target_sources(HistFactory PRIVATE ${sources_headers} ${sources_cxx})
-set_target_properties(HistFactory PROPERTIES PUBLIC_HEADER "${sources_headers}")
 
 target_include_directories(HistFactory PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
@@ -110,8 +109,8 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libHistFactory_rdict.pcm
 # Install the libraries and header files.
 install(TARGETS HistFactory
         LIBRARY DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
 )
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 # For recent clang, this can facilitate auto-vectorisation.
 # In RooFit, the errno side effect is not needed, anyway:

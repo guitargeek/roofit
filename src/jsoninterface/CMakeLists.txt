@@ -23,7 +23,6 @@ set(sources_cxx
 )
 
 target_sources(RooFitJSONInterface PRIVATE ${sources_headers} ${sources_cxx})
-set_target_properties(RooFitJSONInterface PROPERTIES PUBLIC_HEADER "${sources_headers}")
 
 target_include_directories(RooFitJSONInterface PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
@@ -34,8 +33,8 @@ target_link_libraries(RooFitJSONInterface PRIVATE
 # Install the libraries and header files.
 install(TARGETS RooFitJSONInterface
         LIBRARY DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
 )
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 find_package(nlohmann_json)
 
