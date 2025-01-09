@@ -42,13 +42,15 @@
 #include "ConstraintHelpers.h"
 #include "RooEvaluatorWrapper.h"
 #include "RooFitImplHelpers.h"
-#include "RooNLLVarNew.h"
+#include "RooFit/Detail/RooNLLVarNew.h"
 
 #ifdef ROOFIT_LEGACY_EVAL_BACKEND
 #include "RooChi2Var.h"
 #include "RooNLLVar.h"
 #include "RooXYChi2Var.h"
 #endif
+
+using RooFit::Detail::RooNLLVarNew;
 
 namespace {
 
@@ -105,7 +107,7 @@ int calcAsymptoticCorrectedCovariance(RooAbsReal &pdf, RooMinimizer &minimizer, 
    const RooArgList &floated = rw->floatParsFinal();
    RooArgSet allparams;
    logpdf.getParameters(data.get(), allparams);
-   std::unique_ptr<RooArgSet> floatingparams{static_cast<RooArgSet *>(allparams.selectByAttrib("Constant", false))};
+   std::unique_ptr<RooArgSet> floatingparams{allparams.selectByAttrib("Constant", false)};
 
    const double eps = 1.0e-4;
 
@@ -317,7 +319,7 @@ void resetFitrangeAttributes(RooAbsArg &pdf, RooAbsData const &data, std::string
    pdf.setStringAttribute("fitrange", fitrangeValue.substr(0, fitrangeValue.size() - 1).c_str());
 }
 
-std::unique_ptr<RooAbsArg> createSimultaneousNLL(RooSimultaneous const &simPdf, bool isExtended,
+std::unique_ptr<RooAbsArg> createSimultaneousNLL(RooSimultaneous const &simPdf, bool isSimPdfExtended,
                                                  std::string const &rangeName, RooFit::OffsetMode offset)
 {
    RooAbsCategoryLValue const &simCat = simPdf.indexCat();
@@ -341,9 +343,14 @@ std::unique_ptr<RooAbsArg> createSimultaneousNLL(RooSimultaneous const &simPdf, 
 
       if (RooAbsPdf *pdf = simPdf.getPdf(catName.c_str())) {
          auto name = std::string("nll_") + pdf->GetName();
-         std::unique_ptr<RooArgSet> observables(
-            static_cast<RooArgSet *>(std::unique_ptr<RooArgSet>(pdf->getVariables())->selectByAttrib("__obs__", true)));
-         auto nll = std::make_unique<RooNLLVarNew>(name.c_str(), name.c_str(), *pdf, *observables, isExtended, offset);
+         std::unique_ptr<RooArgSet> observables{
+            std::unique_ptr<RooArgSet>(pdf->getVariables())->selectByAttrib("__obs__", true)};
+         // In a simultaneous fit, it is allowed that only a subset of the pdfs
+         // are extended. Therefore, we have to make sure that we don't request
+         // extended NLL objects for channels that can't be extended.
+         const bool isPdfExtended = isSimPdfExtended && pdf->extendMode() != RooAbsPdf::CanNotBeExtended;
+         auto nll =
+            std::make_unique<RooNLLVarNew>(name.c_str(), name.c_str(), *pdf, *observables, isPdfExtended, offset);
          // Rename the special variables
          nll->setPrefix(std::string("_") + catName + "_");
          nllTerms.addOwned(std::move(nll));

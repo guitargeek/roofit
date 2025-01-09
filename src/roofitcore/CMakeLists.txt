@@ -112,10 +112,12 @@ set(sources_headers
     RooFactoryWSTool.h
     RooFirstMoment.h
     RooFit.h
+    RooFit/CodegenContext.h
     RooFit/Config.h
-    RooFit/Detail/CodeSquashContext.h
     RooFit/Detail/MathFuncs.h
     RooFit/Detail/NormalizationHelpers.h
+    RooFit/Detail/RooNLLVarNew.h
+    RooFit/Detail/RooNormalizedPdf.h
     RooFit/EvalContext.h
     RooFit/Evaluator.h
     RooFit/Floats.h
@@ -128,8 +130,8 @@ set(sources_headers
     RooFit/TestStatistics/RooSubsidiaryL.h
     RooFit/TestStatistics/RooSumL.h
     RooFit/TestStatistics/RooUnbinnedL.h
-    RooFit/TestStatistics/buildLikelihood.h
     RooFit/TestStatistics/SharedOffset.h
+    RooFit/TestStatistics/buildLikelihood.h
     RooFitLegacy/RooCatTypeLegacy.h
     RooFitLegacy/RooCategorySharedProperties.h
     RooFitLegacy/RooTreeData.h
@@ -185,7 +187,6 @@ set(sources_headers
     RooProduct.h
     RooProfileLL.h
     RooProjectedPdf.h
-    RooProofDriverSelector.h
     RooPullVar.h
     RooQuasiRandomGenerator.h
     RooRandom.h
@@ -324,7 +325,7 @@ set(sources_cxx
     src/RooFFTConvPdf.cxx
     src/RooFactoryWSTool.cxx
     src/RooFirstMoment.cxx
-    src/RooFit/Detail/CodeSquashContext.cxx
+    src/RooFit/CodegenContext.cxx
     src/RooFit/EvalContext.cxx
     src/RooFit/Evaluator.cxx
     src/RooFitImplHelpers.cxx
@@ -389,7 +390,6 @@ set(sources_cxx
     src/RooProduct.cxx
     src/RooProfileLL.cxx
     src/RooProjectedPdf.cxx
-    src/RooProofDriverSelector.cxx
     src/RooPullVar.cxx
     src/RooQuasiRandomGenerator.cxx
     src/RooRandom.cxx

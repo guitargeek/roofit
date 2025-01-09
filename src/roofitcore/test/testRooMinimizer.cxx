@@ -160,7 +160,7 @@ TEST_P(EvalBackendParametrizedTest, RF601)
    EXPECT_TRUE(r2->isIdentical(r2Ref, tol, tol));
 }
 
-INSTANTIATE_TEST_SUITE_P(RooMinimizer, EvalBackendParametrizedTest, testing::Values(ROOFIT_EVAL_BACKENDS_WITH_CODEGEN),
+INSTANTIATE_TEST_SUITE_P(RooMinimizer, EvalBackendParametrizedTest, testing::Values(ROOFIT_EVAL_BACKENDS),
                          [](testing::TestParamInfo<EvalBackendParametrizedTest::ParamType> const &paramInfo) {
                             std::stringstream ss;
                             ss << "EvalBackend" << std::get<0>(paramInfo.param).name();

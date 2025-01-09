@@ -26,6 +26,7 @@ stdenv.mkDerivation {
         -DCMAKE_INSTALL_PREFIX=../install \
         -Dccache=ON \
         -Dtesting=ON \
+        -Dmathmore=ON \
         -Dxml=OFF \
         .."
 

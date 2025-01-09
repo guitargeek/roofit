@@ -409,7 +409,7 @@ TEST(RooSimultaneous, ConditionalProdPdf)
 }
 
 // Test that we can evaluate a RooSimultaneous also if only a fraction of the
-// channels can be extended.
+// channels can be extended. Also check if the likelihood can be created.
 TEST(RooSimultaneous, PartiallyExtendedPdfs)
 {
    RooWorkspace ws;
@@ -419,7 +419,40 @@ TEST(RooSimultaneous, PartiallyExtendedPdfs)
    ws.factory("ExtendPdf::pdfBext(pdfB, n_b[1000., 100., 10000.])");
    ws.factory("SIMUL::simPdf( cat[A=0,B=1], A=pdfAprod, B=pdfBext)");
 
-   RooArgSet observables{*ws.var("x_a"), *ws.var("x_b")};
+   RooArgSet observables{*ws.var("x_a"), *ws.var("x_b"), *ws.cat("cat")};
 
-   std::cout << ws.pdf("simPdf")->getVal() << std::endl;
+   auto &simPdf = *ws.pdf("simPdf");
+   std::cout << simPdf.getVal() << std::endl;
+
+   // A completely extended pdf, just to easily create a toy dataset
+   ws.factory("ExtendPdf::pdfAext(pdfA, n_b[1000., 100., 10000.])");
+   ws.factory("SIMUL::simPdfExtBoth( cat[A=0,B=1], A=pdfAext, B=pdfBext)");
+   std::unique_ptr<RooDataSet> data{ws.pdf("simPdfExtBoth")->generate(observables)};
+
+   // Check if likelihood can be instantiated
+   std::unique_ptr<RooAbsReal> nll{simPdf.createNLL(*data)};
+}
+
+// Make sure that one can use the same extended pdf instance for different
+// channels, and the RooSimultaneous will still evaluate correctly.
+TEST(RooSimultaneous, DuplicateExtendedPdfs)
+{
+   RooWorkspace ws;
+
+   ws.factory("Uniform::u_a(x[0, 10])");
+   ws.factory("Uniform::u_b(x)");
+   ws.factory("ExtendPdf::pdf_a(u_a, n[1000, 100, 10000])");
+   ws.factory("ExtendPdf::pdf_b(u_b, n)");
+
+   ws.factory("SIMUL::simPdf( c[A=0,B=1], A=pdf_a, B=pdf_a)");
+   ws.factory("SIMUL::simPdfRef( c, A=pdf_a, B=pdf_b)");
+
+   RooArgSet normSet{*ws.var("x")};
+
+   RooAbsPdf &simPdf = *ws.pdf("simPdf");
+   RooAbsPdf &simPdfRef = *ws.pdf("simPdfRef");
+   double simPdfVal = simPdf.getVal(normSet);
+
+   EXPECT_FLOAT_EQ(simPdfVal, 0.05);
+   EXPECT_DOUBLE_EQ(simPdfVal, simPdfRef.getVal(normSet));
 }

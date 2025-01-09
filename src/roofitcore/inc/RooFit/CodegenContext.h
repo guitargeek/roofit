@@ -11,8 +11,8 @@
  * listed in LICENSE (http://roofit.sourceforge.net/license.txt)
  */
 
-#ifndef RooFit_Detail_CodeSquashContext_h
-#define RooFit_Detail_CodeSquashContext_h
+#ifndef RooFit_Detail_CodegenContext_h
+#define RooFit_Detail_CodegenContext_h
 
 #include <RooAbsCollection.h>
 #include <RooFit/EvalContext.h>
@@ -31,19 +31,20 @@ template <class T>
 class RooTemplateProxy;
 
 namespace RooFit {
-
 namespace Experimental {
-class RooFuncWrapper;
-}
 
-namespace Detail {
+template <int P>
+struct Prio {
+   static_assert(P >= 1 && P <= 10, "P must be 1 <= P <= 10!");
+   static auto next() { return Prio<P + 1>{}; }
+};
+
+using PrioHighest = Prio<1>;
+using PrioLowest = Prio<10>;
 
 /// @brief A class to maintain the context for squashing of RooFit models into code.
-class CodeSquashContext {
+class CodegenContext {
 public:
-   CodeSquashContext(std::map<RooFit::Detail::DataKey, std::size_t> const &outputSizes, std::vector<double> &xlarr,
-                     Experimental::RooFuncWrapper &wrapper);
-
    void addResult(RooAbsArg const *key, std::string const &value);
    void addResult(const char *key, std::string const &value);
 
@@ -68,7 +69,6 @@ public:
    }
 
    void addToGlobalScope(std::string const &str);
-   std::string assembleCode(std::string const &returnExpr);
    void addVecObs(const char *key, int idx);
 
    void addToCodeBody(RooAbsArg const *klass, std::string const &in);
@@ -94,13 +94,13 @@ public:
    /// }
    class LoopScope {
    public:
-      LoopScope(CodeSquashContext &ctx, std::vector<TNamed const *> &&vars) : _ctx{ctx}, _vars{vars} {}
+      LoopScope(CodegenContext &ctx, std::vector<TNamed const *> &&vars) : _ctx{ctx}, _vars{vars} {}
       ~LoopScope() { _ctx.endLoop(*this); }
 
       std::vector<TNamed const *> const &vars() const { return _vars; }
 
    private:
-      CodeSquashContext &_ctx;
+      CodegenContext &_ctx;
       const std::vector<TNamed const *> _vars;
    };
 
@@ -113,11 +113,30 @@ public:
    std::string buildArg(std::span<const double> arr);
    std::string buildArg(std::span<const int> arr) { return buildArgSpanImpl(arr); }
 
-   void collectFunction(std::string const &name);
+   std::vector<double> const &xlArr() { return _xlArr; }
 
-   Experimental::RooFuncWrapper *_wrapper = nullptr;
+   void collectFunction(std::string const &name);
+   std::vector<std::string> const &collectedFunctions() { return _collectedFunctions; }
+
+   std::string
+   buildFunction(RooAbsArg const &arg, std::map<RooFit::Detail::DataKey, std::size_t> const &outputSizes = {});
+
+   auto const &outputSizes() const { return _nodeOutputSizes; }
+
+   struct ScopeRAII {
+      std::string _fn;
+      CodegenContext &_ctx;
+      RooAbsArg const *_arg;
+
+   public:
+      ScopeRAII(RooAbsArg const *arg, CodegenContext &ctx);
+      ~ScopeRAII();
+   };
+   ScopeRAII OutputScopeRangeComment(RooAbsArg const *arg) { return {arg, *this}; }
 
 private:
+   void pushScope();
+   void popScope();
    template <class T>
    std::string buildArgSpanImpl(std::span<const T> arr);
 
@@ -171,41 +190,35 @@ private:
 
    /// @brief Map of node names to their result strings.
    std::unordered_map<const TNamed *, std::string> _nodeNames;
-   /// @brief Block of code that is placed before the rest of the function body.
-   std::string _globalScope;
    /// @brief A map to keep track of the observable indices if they are non scalar.
    std::unordered_map<const TNamed *, int> _vecObsIndices;
    /// @brief Map of node output sizes.
    std::map<RooFit::Detail::DataKey, std::size_t> _nodeOutputSizes;
-   /// @brief Stores the squashed code body.
-   std::string _code;
-   /// @brief The current number of for loops the started.
-   int _loopLevel = 0;
+   /// @brief The code layered by lexical scopes used as a stack.
+   std::vector<std::string> _code;
+   /// @brief The indentation level for pretty-printing.
+   unsigned _indent = 0;
    /// @brief Index to get unique names for temporary variables.
    mutable int _tmpVarIdx = 0;
-   /// @brief Keeps track of the position to go back and insert code to.
-   int _scopePtr = -1;
-   /// @brief Stores code that eventually gets injected into main code body.
-   /// Mainly used for placing decls outside of loops.
-   std::string _tempScope;
    /// @brief A map to keep track of list names as assigned by addResult.
-   std::unordered_map<RooFit::UniqueId<RooAbsCollection>::Value_t, std::string> listNames;
-   std::vector<double> &_xlArr;
+   std::unordered_map<RooFit::UniqueId<RooAbsCollection>::Value_t, std::string> _listNames;
+   std::vector<double> _xlArr;
+   std::vector<std::string> _collectedFunctions;
 };
 
 template <>
-inline std::string CodeSquashContext::typeName<double>() const
+inline std::string CodegenContext::typeName<double>() const
 {
    return "double";
 }
 template <>
-inline std::string CodeSquashContext::typeName<int>() const
+inline std::string CodegenContext::typeName<int>() const
 {
    return "int";
 }
 
 template <class T>
-std::string CodeSquashContext::buildArgSpanImpl(std::span<const T> arr)
+std::string CodegenContext::buildArgSpanImpl(std::span<const T> arr)
 {
    unsigned int n = arr.size();
    std::string arrName = getTmpVarName();
@@ -220,8 +233,11 @@ std::string CodeSquashContext::buildArgSpanImpl(std::span<const T> arr)
    return arrName;
 }
 
-} // namespace Detail
+void declareDispatcherCode(std::string const &funcName);
 
+void codegen(RooAbsArg &arg, CodegenContext &ctx);
+
+} // namespace Experimental
 } // namespace RooFit
 
 #endif
