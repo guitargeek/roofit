@@ -15,6 +15,8 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFitXRooFit
         src/xRooNLLVar.cxx
         src/xRooNode.cxx
         src/xRooNode_interactive.cxx
+        DICTIONARY_OPTIONS
+        "-writeEmptyRootPCM"
         LIBRARIES
         HistFactory
         RooFit
@@ -31,3 +33,5 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFitXRooFit
         )
 
 target_include_directories(RooFitXRooFit PRIVATE inc/RooFit)
+
+ROOT_ADD_TEST_SUBDIRECTORY(test)

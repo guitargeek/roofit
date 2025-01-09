@@ -39,3 +39,7 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 find_package(nlohmann_json)
 
 target_link_libraries(RooFitJSONInterface PRIVATE nlohmann_json::nlohmann_json)
+
+if(testing)
+  #add_subdirectory(test)
+endif()

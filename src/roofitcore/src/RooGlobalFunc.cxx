@@ -18,6 +18,7 @@
 
 #include <RooGlobalFunc.h>
 
+#include <RooAbsData.h>
 #include <RooAbsPdf.h>
 #include <RooCategory.h>
 #include <RooDataHist.h>
@@ -30,7 +31,6 @@
 #include <RooRealConstant.h>
 #include <RooRealVar.h>
 
-#include <TColor.h>
 #include <TH1.h>
 #include <TInterpreter.h>
 
@@ -83,19 +83,6 @@ RooCmdArg processFlatMap(const char *name, Func_t func, Detail::FlatMap<Key_t, V
 int interpretString(std::string const &s)
 {
    return gInterpreter->ProcessLine(s.c_str());
-}
-
-Color_t interpretColorString(std::string const &color)
-{
-   using Map = std::unordered_map<std::string, Color_t>;
-   // Color dictionary to define matplotlib conventions
-   static Map colorMap{{"r", kRed},   {"b", kBlue},  {"g", kGreen},   {"y", kYellow},
-                       {"w", kWhite}, {"k", kBlack}, {"m", kMagenta}, {"c", kCyan}};
-   auto found = colorMap.find(color);
-   if (found != colorMap.end())
-      return found->second;
-   // Lookup color from static color map otherwise
-   return TColor::GetColorByName(color.c_str());
 }
 
 Style_t interpretLineStyleString(std::string const &style)
@@ -212,30 +199,9 @@ RooCmdArg VLines()
 {
    return RooCmdArg("VLines", 1, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
 }
-RooCmdArg LineColor(Color_t color)
+RooCmdArg LineColor(TColorNumber color)
 {
-   return RooCmdArg("LineColor", color);
-}
-
-/// The `color` string argument argument will be evaluated with the ROOT
-/// interpreter to get the actual ROOT color enum value, like `ROOT.kRed`.
-/// Here is what you can do with it:
-///
-///   1. Pass a string with the enum value name instead, e.g.:
-/// ~~~ {.cxx}
-/// pdf.plotOn(frame, LineColor("kRed"))
-/// ~~~
-///   2. Pass a string with the corresponding single-character color code following the matplotlib convention:
-/// ~~~ {.cxx}
-/// pdf.plotOn(frame, LineColor("r"))
-/// ~~~
-///   3. Pass a string with the enum value name instead followed by some manipulation of the enum value:
-/// ~~~ {.cxx}
-/// pdf.plotOn(frame, LineColor("kRed+1"))
-/// ~~~
-RooCmdArg LineColor(std::string const &color)
-{
-   return LineColor(interpretColorString(color));
+   return RooCmdArg("LineColor", color.number());
 }
 RooCmdArg LineStyle(Style_t style)
 {
@@ -249,13 +215,9 @@ RooCmdArg LineWidth(Width_t width)
 {
    return RooCmdArg("LineWidth", width);
 }
-RooCmdArg FillColor(Color_t color)
+RooCmdArg FillColor(TColorNumber color)
 {
-   return RooCmdArg("FillColor", color);
-}
-RooCmdArg FillColor(std::string const &color)
-{
-   return RooCmdArg("FillColor", interpretColorString(color));
+   return RooCmdArg("FillColor", color.number());
 }
 RooCmdArg FillStyle(Style_t style)
 {
@@ -349,13 +311,9 @@ RooCmdArg MarkerSize(Size_t size)
 {
    return RooCmdArg("MarkerSize", 0, 0, size, 0, nullptr, nullptr, nullptr, nullptr);
 }
-RooCmdArg MarkerColor(Color_t color)
+RooCmdArg MarkerColor(TColorNumber color)
 {
-   return RooCmdArg("MarkerColor", color, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
-}
-RooCmdArg MarkerColor(std::string const &color)
-{
-   return MarkerColor(interpretColorString(color));
+   return RooCmdArg("MarkerColor", color.number());
 }
 RooCmdArg CutRange(const char *rangeName)
 {
@@ -469,7 +427,11 @@ RooCmdArg Extended(bool flag)
 }
 RooCmdArg DataError(Int_t etype)
 {
-   return RooCmdArg("DataError", (Int_t)etype, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
+   return RooCmdArg("DataError", etype);
+}
+RooCmdArg DataError(std::string const &etype)
+{
+   return DataError(RooAbsData::errorTypeFromString(etype));
 }
 RooCmdArg NumCPU(Int_t nCPU, Int_t interleave)
 {
@@ -1022,9 +984,9 @@ RooCmdArg Prefix(bool flag)
 {
    return RooCmdArg("Prefix", flag, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
 }
-RooCmdArg Color(Color_t color)
+RooCmdArg Color(TColorNumber color)
 {
-   return RooCmdArg("Color", color, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
+   return RooCmdArg("Color", color.number());
 }
 
 // RooWorkspace::import() arguments
@@ -1168,3 +1130,45 @@ RooConstVar &C(double value)
 }
 
 } // namespace RooFitShortHand
+
+
+////////////////////////////////////////////////////////////////////////////////
+/// The `color` string argument argument will be evaluated
+/// to get the actual ROOT color number, like `kRed`.
+/// Here is how the string is parsed:
+///
+///   1. Match against single-character color codes following the matplotlib convention.
+///      For example, to get red color (equivalent to `kRed`):
+///      ~~~ {.cxx}
+///      hist.SetLineColor("r")
+///      ~~~
+///   2. Check if the string matches an en existing TColor name (see TColor::GetColorByName()).
+///      For example:
+///      ~~~ {.cxx}
+///      hist.SetLineColor("kRed+1")
+///      ~~~
+///
+/// In case no corresponding color is found, a `std::invalid_argument` exception is thrown.
+TColorNumber::TColorNumber(std::string const &color)
+{
+   using Map = std::unordered_map<std::string, Int_t>;
+   // Color dictionary to define matplotlib conventions
+   static Map colorMap{{"r", kRed},   {"b", kBlue},  {"g", kGreen},   {"y", kYellow},
+                       {"w", kWhite}, {"k", kBlack}, {"m", kMagenta}, {"c", kCyan}};
+   auto found = colorMap.find(color);
+   if (found != colorMap.end()) {
+      fNumber = found->second;
+      return;
+   }
+
+   fNumber = TColor::GetColorByName(color.c_str());
+   if (fNumber == -1) {
+      std::stringstream msg;
+      msg << "\"" << color << "\" is not a valid color name";
+      throw std::invalid_argument(msg.str());
+   }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// Instantiate a color from a tuple of RGB values between 0.0 and 1.0.
+TColorNumber::TColorNumber(std::array<Float_t, 3> rgb) : fNumber{TColor::GetColor(rgb[0], rgb[1], rgb[2])} {}

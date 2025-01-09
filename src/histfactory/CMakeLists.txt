@@ -59,7 +59,6 @@ set(sources_cxx
     src/HistFactoryNavigation.cxx
     src/HistRef.cxx
     src/HistoToWorkspaceFactoryFast.cxx
-    src/JSONTool.cxx
     src/LinInterpVar.cxx
     src/MakeModelAndMeasurementsFast.cxx
     src/Measurement.cxx
@@ -123,12 +122,7 @@ endif()
 # can't build hist2workspace without xml.
 if(xml)
   ROOT_EXECUTABLE(hist2workspace hist2workspace.cxx LIBRARIES HistFactory)
-
-  #---Createhist2workspaceCommandLineOptions------------------------------------------------------------------
-  generateHeader(hist2workspace
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/hist2workspace-argparse.py
-    ${CMAKE_BINARY_DIR}/ginclude/hist2workspaceCommandLineOptionsHelp.h
-  )
+  target_compile_definitions(HistFactory PUBLIC HISTFACTORY_XML)
 endif()
 
 if(MSVC)
@@ -144,5 +138,5 @@ install(FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${prepareHistFactory_script}
                 DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(testing)
-  #add_subdirectory(test)
+  add_subdirectory(test)
 endif()

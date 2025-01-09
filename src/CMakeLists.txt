@@ -6,6 +6,7 @@
 
 set(roofit_legacy_eval_backend ON CACHE BOOL "" FORCE)
 
+add_subdirectory(codegen)
 add_subdirectory(batchcompute)
 #if (roofit_multiprocess)
   #add_subdirectory(roofitZMQ)
@@ -18,9 +19,8 @@ if(mathmore)
 endif()
 add_subdirectory(roostats)
 add_subdirectory(histfactory)
-#add_subdirectory(RDataFrameHelpers)
 add_subdirectory(jsoninterface)
-#add_subdirectory(hs3)
+add_subdirectory(hs3)
 #if(roofit_legacy_eval_backend AND NOT MSVC)
   #add_subdirectory(xroofit)
 #endif()

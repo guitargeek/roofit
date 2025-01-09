@@ -62,6 +62,7 @@ set(sources_headers
     RooParamHistFunc.h
     RooPoisson.h
     RooPolynomial.h
+    RooPyBind.h
     RooSpline.h
     RooStepFunction.h
     RooTFnBinding.h

@@ -119,6 +119,9 @@ observable snapshots are stored in the dataset.
 
 #include <iostream>
 #include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <unordered_map>
 
 
 ClassImp(RooAbsData);
@@ -1240,21 +1243,12 @@ RooPlot* RooAbsData::statOn(RooPlot* frame, const char* what, const char *label,
   meanv->setPlotLabel("Mean") ;
   std::unique_ptr<RooRealVar> rms{rmsVar(*static_cast<RooRealVar*>(frame->getPlotVar()),cutSpec,cutRange)};
   rms->setPlotLabel("RMS") ;
-  std::unique_ptr<TString> rmsText;
-  std::unique_ptr<TString> meanText;
-  std::unique_ptr<TString> NText;
-  if (options) {
-    rmsText.reset(rms->format(sigDigits,options));
-    meanText.reset(meanv->format(sigDigits,options));
-    NText.reset(N.format(sigDigits,options));
-  } else {
-    rmsText.reset(rms->format(*formatCmd));
-    meanText.reset(meanv->format(*formatCmd));
-    NText.reset(N.format(*formatCmd));
-  }
-  if (showR) box->AddText(rmsText->Data());
-  if (showM) box->AddText(meanText->Data());
-  if (showN) box->AddText(NText->Data());
+  std::string rmsText = options ? rms->format(sigDigits,options) : rms->format(*formatCmd);
+  std::string meanText = options ? meanv->format(sigDigits,options) : meanv->format(*formatCmd);
+  std::string NText = options ? N.format(sigDigits,options) : N.format(*formatCmd);
+  if (showR) box->AddText(rmsText.c_str());
+  if (showM) box->AddText(meanText.c_str());
+  if (showN) box->AddText(NText.c_str());
 
   // add the optional label if specified
   if(showLabel) box->AddText(label);
@@ -2639,4 +2633,25 @@ TH2F *RooAbsData::createHistogram(const RooAbsRealLValue &var1, const RooAbsReal
    }
 
    return histogram;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// Convert a string to the value of the RooAbsData::ErrorType enum with the
+/// same name.
+RooAbsData::ErrorType RooAbsData::errorTypeFromString(std::string const &name)
+{
+   using Map = std::unordered_map<std::string, RooAbsData::ErrorType>;
+   static Map enumMap{{"Poisson", RooAbsData::Poisson},
+                      {"SumW2", RooAbsData::SumW2},
+                      {"None", RooAbsData::None},
+                      {"Auto", RooAbsData::Auto},
+                      {"Expected", RooAbsData::Expected}};
+   auto found = enumMap.find(name);
+   if (found == enumMap.end()) {
+      std::stringstream msg;
+      msg << "Unsupported error type type passed to DataError(). "
+             "Supported decay types are : \"Poisson\", \"SumW2\", \"Auto\", \"Expected\", and None.";
+      throw std::invalid_argument(msg.str());
+   }
+   return found->second;
 }

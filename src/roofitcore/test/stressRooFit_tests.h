@@ -85,7 +85,9 @@ using namespace RooFit;
 class TestBasic101 : public RooUnitTest {
 public:
    TestBasic101(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Fitting,plotting & event generation of basic p.d.f", refFile, writeRef, verbose){};
+      : RooUnitTest("Fitting,plotting & event generation of basic p.d.f", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -145,7 +147,9 @@ public:
 class TestBasic102 : public RooUnitTest {
 public:
    TestBasic102(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Data import methods", refFile, writeRef, verbose){};
+      : RooUnitTest("Data import methods", refFile, writeRef, verbose)
+   {
+   }
 
    std::unique_ptr<TH1> makeTH1()
    {
@@ -276,7 +280,9 @@ public:
 class TestBasic103 : public RooUnitTest {
 public:
    TestBasic103(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Interpreted expression p.d.f.", refFile, writeRef, verbose){};
+      : RooUnitTest("Interpreted expression p.d.f.", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -360,7 +366,9 @@ public:
 class TestBasic105 : public RooUnitTest {
 public:
    TestBasic105(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("C++ function binding operator p.d.f", refFile, writeRef, verbose){};
+      : RooUnitTest("C++ function binding operator p.d.f", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -423,7 +431,9 @@ public:
 class TestBasic108 : public RooUnitTest {
 public:
    TestBasic108(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Non-standard binning in counting and asymmetry plots", refFile, writeRef, verbose){};
+      : RooUnitTest("Non-standard binning in counting and asymmetry plots", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -524,7 +534,9 @@ public:
 class TestBasic109 : public RooUnitTest {
 public:
    TestBasic109(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Calculation of chi^2 and residuals in plots", refFile, writeRef, verbose){};
+      : RooUnitTest("Calculation of chi^2 and residuals in plots", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -596,7 +608,9 @@ public:
 class TestBasic110 : public RooUnitTest {
 public:
    TestBasic110(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Normalization of p.d.f.s in 1D", refFile, writeRef, verbose){};
+      : RooUnitTest("Normalization of p.d.f.s in 1D", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -659,7 +673,9 @@ public:
 class TestBasic111 : public RooUnitTest {
 public:
    TestBasic111(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Numeric integration configuration", refFile, writeRef, verbose){};
+      : RooUnitTest("Numeric integration configuration", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -728,7 +744,9 @@ public:
 class TestBasic201 : public RooUnitTest {
 public:
    TestBasic201(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Addition operator p.d.f.", refFile, writeRef, verbose){};
+      : RooUnitTest("Addition operator p.d.f.", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -821,7 +839,9 @@ public:
 class TestBasic202 : public RooUnitTest {
 public:
    TestBasic202(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Extended ML fits to addition operator p.d.f.s", refFile, writeRef, verbose){};
+      : RooUnitTest("Extended ML fits to addition operator p.d.f.s", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -910,7 +930,9 @@ public:
 class TestBasic203 : public RooUnitTest {
 public:
    TestBasic203(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Basic fitting and plotting in ranges", refFile, writeRef, verbose){};
+      : RooUnitTest("Basic fitting and plotting in ranges", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -971,7 +993,9 @@ public:
 class TestBasic204 : public RooUnitTest {
 public:
    TestBasic204(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Extended ML fit in sub range", refFile, writeRef, verbose){};
+      : RooUnitTest("Extended ML fit in sub range", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1035,7 +1059,9 @@ public:
 class TestBasic205 : public RooUnitTest {
 public:
    TestBasic205(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Component plotting variations", refFile, writeRef, verbose){};
+      : RooUnitTest("Component plotting variations", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1127,7 +1153,9 @@ public:
 class TestBasic208 : public RooUnitTest {
 public:
    TestBasic208(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("FFT Convolution operator p.d.f.", refFile, writeRef, verbose){};
+      : RooUnitTest("FFT Convolution operator p.d.f.", refFile, writeRef, verbose)
+   {
+   }
 
    bool isTestAvailable() override
    {
@@ -1213,7 +1241,9 @@ public:
 class TestBasic209 : public RooUnitTest {
 public:
    TestBasic209(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Analytical convolution operator", refFile, writeRef, verbose){};
+      : RooUnitTest("Analytical convolution operator", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1279,7 +1309,9 @@ public:
 class TestBasic301 : public RooUnitTest {
 public:
    TestBasic301(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Composition extension of basic p.d.f", refFile, writeRef, verbose){};
+      : RooUnitTest("Composition extension of basic p.d.f", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1332,7 +1364,9 @@ public:
 class TestBasic302 : public RooUnitTest {
 public:
    TestBasic302(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Sum and product utility functions", refFile, writeRef, verbose){};
+      : RooUnitTest("Sum and product utility functions", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1433,7 +1467,9 @@ public:
    }
 
    TestBasic303(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Conditional use of F(x|y)", refFile, writeRef, verbose){};
+      : RooUnitTest("Conditional use of F(x|y)", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1499,7 +1535,9 @@ public:
 class TestBasic304 : public RooUnitTest {
 public:
    TestBasic304(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Product operator p.d.f. with uncorrelated terms", refFile, writeRef, verbose){};
+      : RooUnitTest("Product operator p.d.f. with uncorrelated terms", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1553,7 +1591,9 @@ public:
 class TestBasic305 : public RooUnitTest {
 public:
    TestBasic305(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Product operator p.d.f. with conditional term", refFile, writeRef, verbose){};
+      : RooUnitTest("Product operator p.d.f. with conditional term", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1617,7 +1657,9 @@ public:
 class TestBasic306 : public RooUnitTest {
 public:
    TestBasic306(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Conditional use of per-event error p.d.f. F(t|dt)", refFile, writeRef, verbose){};
+      : RooUnitTest("Conditional use of per-event error p.d.f. F(t|dt)", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1693,7 +1735,9 @@ public:
 class TestBasic307 : public RooUnitTest {
 public:
    TestBasic307(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Full per-event error p.d.f. F(t|dt)G(dt)", refFile, writeRef, verbose){};
+      : RooUnitTest("Full per-event error p.d.f. F(t|dt)G(dt)", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1765,7 +1809,9 @@ public:
 class TestBasic308 : public RooUnitTest {
 public:
    TestBasic308(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Normalization of p.d.f.s in 2D", refFile, writeRef, verbose){};
+      : RooUnitTest("Normalization of p.d.f.s in 2D", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1842,7 +1888,9 @@ public:
 class TestBasic310 : public RooUnitTest {
 public:
    TestBasic310(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Data and p.d.f projection in category slice", refFile, writeRef, verbose){};
+      : RooUnitTest("Data and p.d.f projection in category slice", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1917,7 +1965,9 @@ public:
 class TestBasic311 : public RooUnitTest {
 public:
    TestBasic311(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Data and p.d.f projection in sub range", refFile, writeRef, verbose){};
+      : RooUnitTest("Data and p.d.f projection in sub range", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -1984,7 +2034,9 @@ public:
 class TestBasic312 : public RooUnitTest {
 public:
    TestBasic312(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Fit in multiple rectangular ranges", refFile, writeRef, verbose){};
+      : RooUnitTest("Fit in multiple rectangular ranges", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2076,7 +2128,9 @@ public:
 class TestBasic313 : public RooUnitTest {
 public:
    TestBasic313(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Integration over non-rectangular regions", refFile, writeRef, verbose){};
+      : RooUnitTest("Integration over non-rectangular regions", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2143,7 +2197,9 @@ public:
 class TestBasic314 : public RooUnitTest {
 public:
    TestBasic314(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Fit with non-rectangular observable boundaries", refFile, writeRef, verbose){};
+      : RooUnitTest("Fit with non-rectangular observable boundaries", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2199,7 +2255,9 @@ public:
 class TestBasic315 : public RooUnitTest {
 public:
    TestBasic315(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("P.d.f. marginalization through integration", refFile, writeRef, verbose){};
+      : RooUnitTest("P.d.f. marginalization through integration", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2261,7 +2319,9 @@ public:
 class TestBasic316 : public RooUnitTest {
 public:
    TestBasic316(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Likelihood ratio projection plot", refFile, writeRef, verbose){};
+      : RooUnitTest("Likelihood ratio projection plot", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2350,7 +2410,9 @@ public:
 class TestBasic402 : public RooUnitTest {
 public:
    TestBasic402(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Basic operations on datasets", refFile, writeRef, verbose){};
+      : RooUnitTest("Basic operations on datasets", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2442,7 +2504,9 @@ public:
 class TestBasic403 : public RooUnitTest {
 public:
    TestBasic403(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Fits with weighted datasets", refFile, writeRef, verbose){};
+      : RooUnitTest("Fits with weighted datasets", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2466,11 +2530,10 @@ public:
       RooFormulaVar wFunc("w", "event weight", "(x*x+10)", x);
 
       // Add column with variable w to previously generated dataset
-      RooRealVar *w = (RooRealVar *)data->addColumn(wFunc);
+      data->addColumn(wFunc);
 
       // Instruct dataset d in interpret w as event weight rather than as observable
-      RooDataSet dataw(data->GetName(), data->GetTitle(), data.get(), *data->get(), nullptr, w->GetName());
-      // data->setWeightVar(*w) ;
+      RooDataSet dataw{data->GetName(), data->GetTitle(), *data->get(), Import(*data), WeightVar("w")};
 
       // U n b i n n e d   M L   f i t   t o   w e i g h t e d   d a t a
       // ---------------------------------------------------------------
@@ -2559,7 +2622,9 @@ public:
 class TestBasic404 : public RooUnitTest {
 public:
    TestBasic404(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Categories basic functionality", refFile, writeRef, verbose){};
+      : RooUnitTest("Categories basic functionality", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2636,7 +2701,9 @@ public:
 class TestBasic405 : public RooUnitTest {
 public:
    TestBasic405(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Real-to-category functions", refFile, writeRef, verbose){};
+      : RooUnitTest("Real-to-category functions", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2723,7 +2790,9 @@ public:
 class TestBasic406 : public RooUnitTest {
 public:
    TestBasic406(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Category-to-category functions", refFile, writeRef, verbose){};
+      : RooUnitTest("Category-to-category functions", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2798,7 +2867,9 @@ public:
 class TestBasic501 : public RooUnitTest {
 public:
    TestBasic501(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Simultaneous p.d.f. operator", refFile, writeRef, verbose){};
+      : RooUnitTest("Simultaneous p.d.f. operator", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -2910,7 +2981,9 @@ public:
 class TestBasic599 : public RooUnitTest {
 public:
    TestBasic599(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Workspace and p.d.f. persistence", refFile, writeRef, verbose){};
+      : RooUnitTest("Workspace and p.d.f. persistence", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3114,7 +3187,9 @@ public:
 class TestBasic602 : public RooUnitTest {
 public:
    TestBasic602(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Chi2 minimization", refFile, writeRef, verbose){};
+      : RooUnitTest("Chi2 minimization", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3173,7 +3248,9 @@ public:
 class TestBasic604 : public RooUnitTest {
 public:
    TestBasic604(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Auxiliary observable constraints", refFile, writeRef, verbose){};
+      : RooUnitTest("Auxiliary observable constraints", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3239,7 +3316,9 @@ public:
 class TestBasic605 : public RooUnitTest {
 public:
    TestBasic605(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Profile Likelihood operator", refFile, writeRef, verbose){};
+      : RooUnitTest("Profile Likelihood operator", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3320,7 +3399,9 @@ public:
 class TestBasic606 : public RooUnitTest {
 public:
    TestBasic606(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("NLL error handling", refFile, writeRef, verbose){};
+      : RooUnitTest("NLL error handling", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3380,7 +3461,9 @@ public:
 class TestBasic607 : public RooUnitTest {
 public:
    TestBasic607(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Fit Result functionality", refFile, writeRef, verbose){};
+      : RooUnitTest("Fit Result functionality", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3451,7 +3534,9 @@ public:
 class TestBasic609 : public RooUnitTest {
 public:
    TestBasic609(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Chi^2 fit to X-Y dataset", refFile, writeRef, verbose){};
+      : RooUnitTest("Chi^2 fit to X-Y dataset", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3521,7 +3606,9 @@ public:
 class TestBasic701 : public RooUnitTest {
 public:
    TestBasic701(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Efficiency operator p.d.f. 1D", refFile, writeRef, verbose){};
+      : RooUnitTest("Efficiency operator p.d.f. 1D", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3591,7 +3678,9 @@ public:
 class TestBasic702 : public RooUnitTest {
 public:
    TestBasic702(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Efficiency operator p.d.f. 2D", refFile, writeRef, verbose){};
+      : RooUnitTest("Efficiency operator p.d.f. 2D", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3673,7 +3762,9 @@ public:
 class TestBasic703 : public RooUnitTest {
 public:
    TestBasic703(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Efficiency product operator p.d.f", refFile, writeRef, verbose){};
+      : RooUnitTest("Efficiency product operator p.d.f", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3737,7 +3828,9 @@ public:
 class TestBasic704 : public RooUnitTest {
 public:
    TestBasic704(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Amplitude sum operator p.d.f", refFile, writeRef, verbose){};
+      : RooUnitTest("Amplitude sum operator p.d.f", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3817,7 +3910,9 @@ public:
    double ctol() override { return 5e-2; } // very conservative, this is a numerically difficult test
 
    TestBasic705(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Linear morph operator p.d.f.", refFile, writeRef, verbose){};
+      : RooUnitTest("Linear morph operator p.d.f.", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3931,7 +4026,9 @@ public:
 class TestBasic706 : public RooUnitTest {
 public:
    TestBasic706(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Histogram based p.d.f.s", refFile, writeRef, verbose){};
+      : RooUnitTest("Histogram based p.d.f.s", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -3988,7 +4085,9 @@ public:
 class TestBasic707 : public RooUnitTest {
 public:
    TestBasic707(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Kernel estimation p.d.f.s", refFile, writeRef, verbose){};
+      : RooUnitTest("Kernel estimation p.d.f.s", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -4070,7 +4169,9 @@ public:
 class TestBasic708 : public RooUnitTest {
 public:
    TestBasic708(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("B Physics p.d.f.s", refFile, writeRef, verbose){};
+      : RooUnitTest("B Physics p.d.f.s", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -4244,7 +4345,9 @@ public:
 class TestBasic801 : public RooUnitTest {
 public:
    TestBasic801(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("Automated MC studies", refFile, writeRef, verbose){};
+      : RooUnitTest("Automated MC studies", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -4327,7 +4430,9 @@ public:
 class TestBasic802 : public RooUnitTest {
 public:
    TestBasic802(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("MC Study with chi^2 calculator", refFile, writeRef, verbose){};
+      : RooUnitTest("MC Study with chi^2 calculator", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -4411,7 +4516,9 @@ public:
 class TestBasic803 : public RooUnitTest {
 public:
    TestBasic803(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("MC Study with param rand. and Z calc", refFile, writeRef, verbose){};
+      : RooUnitTest("MC Study with param rand. and Z calc", refFile, writeRef, verbose)
+   {
+   }
    bool testCode() override
    {
 
@@ -4506,7 +4613,9 @@ public:
 class TestBasic804 : public RooUnitTest {
 public:
    TestBasic804(TFile *refFile, bool writeRef, int verbose)
-      : RooUnitTest("MC Studies with aux. obs. constraints", refFile, writeRef, verbose){};
+      : RooUnitTest("MC Studies with aux. obs. constraints", refFile, writeRef, verbose)
+   {
+   }
 
    double htol() override { return 0.1; } // numerically very difficult test
 

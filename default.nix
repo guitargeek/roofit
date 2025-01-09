@@ -25,7 +25,9 @@ stdenv.mkDerivation {
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_INSTALL_PREFIX=../install \
         -Dccache=ON \
+        -Dclad=ON \
         -Dtesting=ON \
+        -Dmathmore=ON \
         -Dxml=OFF \
         .."
 

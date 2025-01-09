@@ -17,7 +17,13 @@
 // memory safe.
 // #define ROOFIT_MEMORY_SAFE_INTERFACES
 
+#include <RooFit/Config.h>
+
 #include <memory>
+
+#ifndef _R__DEPRECATED_638
+# define _R__DEPRECATED_638(REASON) _R__DEPRECATED_LATER(REASON)
+#endif
 
 namespace RooFit {
 

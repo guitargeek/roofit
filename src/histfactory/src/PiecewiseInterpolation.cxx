@@ -1,22 +1,40 @@
 /** \class PiecewiseInterpolation
- * \ingroup HistFactory
- * The PiecewiseInterpolation is a class that can morph distributions into each other, which
- * is useful to estimate systematic uncertainties. Given a nominal distribution and one or
- * more altered or distorted ones, it computes a new shape depending on the value of the nuisance
- * parameters \f$ \alpha_i \f$:
- * \f[
- *   A = \sum_i \mathrm{Interpolate}(\mathrm{low}_i, \mathrm{nominal}, \mathrm{high}_i, \alpha_i).
- * \f]
- * If an \f$ \alpha_i \f$ is zero, the distribution is identical to the nominal distribution, at
- * \f$ \pm 1 \f$ it is identical to the up/down distribution for that specific \f$ i \f$.
- *
- * The class supports several interpolation methods, which can be selected for each parameter separately
- * using setInterpCode(). The default interpolation code is 4. This performs
- * - \f$ |\alpha | > 1 \f$: Linear extrapolation.
- * - \f$ |\alpha | < 1 \f$: Polynomial interpolation. A sixth-order polynomial is used. Its coefficients
- * are chosen such that function, first, and second derivative at \f$ \alpha \pm 1 \f$ match the values
- * that the extrapolation procedure uses.
- */
+* \ingroup HistFactory
+* The PiecewiseInterpolation is a class that can morph distributions into each other, which
+* is useful to estimate systematic uncertainties. Given a nominal distribution and one or
+* more altered or distorted ones, it computes a new shape depending on the value of the nuisance
+* parameters \f$ \theta_i \f$:
+* \f[
+*   A = \mathrm{nominal} + \sum_i I_i(\theta_i;\mathrm{low}_i, \mathrm{nominal}, \mathrm{high}_i).
+* \f]
+* for additive interpolation modes (interpCodes 0, 2, 3, and 4), or:
+* \f[
+*   A = \mathrm{nominal}\prod_i I_i(\theta_i;\mathrm{low}_i/\mathrm{nominal}, 1, \mathrm{high}_i/\mathrm{nominal}).
+* \f]
+* for multiplicative interpolation modes (interpCodes 1, 5, and 6). The interpCodes determine the function \f$ I_i \f$ (see table below).
+*
+* Note that a PiecewiseInterpolation with \f$ \mathrm{nominal}=1 \f$, N variations, and a multiplicative interpolation mode is equivalent to N
+* PiecewiseInterpolations each with a single variation and the same interpolation code, all inside a RooProduct.
+*
+* If an \f$ \theta_i \f$ is zero, the distribution is identical to the nominal distribution, at
+* \f$ \pm 1 \f$ it is identical to the up/down distribution for that specific \f$ i \f$.
+*
+* PiecewiseInterpolation will behave identically (except for differences in the interpCode assignments) to a FlexibleInterpVar if both its nominal, and high and low variation sets
+* are all RooRealVar.
+*
+* The class supports several interpolation methods, which can be selected for each parameter separately
+* using setInterpCode(). The default interpolation code is 0. The table below provides details of the interpCodes:
+
+| **interpCode** | **Name** | **Description** |
+|----------------|----------|-----------------|
+| 0   (default)  | Additive Piecewise Linear | \f$ I_0(\theta;x_{-},x_0,x_{+}) = \theta(x_{+} - x_0) \f$ for \f$ \theta>=0 \f$, otherwise \f$ \theta(x_0 - x_{-}) \f$. Not recommended except if using a symmetric variation, because of discontinuities in derivatives. |
+| 1              | Multiplicative Piecewise Exponential | \f$ I_1(\theta;x_{-},x_0,x_{+}) = (x_{+}/x_0)^{\theta} \f$ for \f$ \theta>=0 \f$, otherwise \f$ (x_{-}/x_0)^{-\theta} \f$. |
+| 2              | Additive Quadratic Interp. + Linear Extrap. | Deprecated by interpCode 4. |
+| 4              | Additive Poly Interp. + Linear Extrap. | \f$ I_4(\theta;x_{-},x_0,x_{+}) = I_0(\theta;x_{-},x_0,x_{+}) \f$ if \f$ |\theta|>=1 \f$, otherwise \f$ \theta(\frac{x_{+}-x_{-}}{2}+\theta\frac{x_{+}+x_{-}-2x_{0}}{16}(15+\theta^2(3\alpha^2-10))) \f$  (6th-order polynomial through origin for with matching 0th,1st,2nd derivatives at boundary). |
+| 5              | Multiplicative Poly Interp. + Exponential Extrap. | \f$ I_5(\theta;x_{-},x_0,x_{+}) = I_1(\theta;x_{-},x_0,x_{+}) \f$ if \f$ |\theta|>=1 \f$, otherwise 6th-order polynomial for \f$ |\theta_i|<1 \f$ with matching 0th,1st,2nd derivatives at boundary. Recommended for normalization factors. In FlexibleInterpVar this is interpCode=4. |
+| 6              | Multiplicative Poly Interp. + Linear Extrap. | \f$ I_6(\theta;x_{-},x_0,x_{+}) = 1+I_4(\theta;x_{-},x_0,x_{+}). \f$ Recommended for normalization factors that must not have roots (i.e. be equal to 0) outside of \f$ |\theta_i|<1 \f$. |
+
+*/
 
 #include "RooStats/HistFactory/PiecewiseInterpolation.h"
 
@@ -39,8 +57,6 @@
 #include <exception>
 #include <cmath>
 #include <algorithm>
-
-using std::endl, std::cout;
 
 ClassImp(PiecewiseInterpolation);
 
@@ -76,14 +92,14 @@ PiecewiseInterpolation::PiecewiseInterpolation(const char *name, const char *tit
 {
   // KC: check both sizes
   if (lowSet.size() != highSet.size()) {
-    coutE(InputArguments) << "PiecewiseInterpolation::ctor(" << GetName() << ") ERROR: input lists should be of equal length" << endl ;
+    coutE(InputArguments) << "PiecewiseInterpolation::ctor(" << GetName() << ") ERROR: input lists should be of equal length" << std::endl ;
     RooErrorHandler::softAbort() ;
   }
 
   for (auto *comp : lowSet) {
     if (!dynamic_cast<RooAbsReal*>(comp)) {
       coutE(InputArguments) << "PiecewiseInterpolation::ctor(" << GetName() << ") ERROR: component " << comp->GetName()
-             << " in first list is not of type RooAbsReal" << endl ;
+             << " in first list is not of type RooAbsReal" << std::endl ;
       RooErrorHandler::softAbort() ;
     }
     _lowSet.add(*comp) ;
@@ -93,7 +109,7 @@ PiecewiseInterpolation::PiecewiseInterpolation(const char *name, const char *tit
   for (auto *comp : highSet) {
     if (!dynamic_cast<RooAbsReal*>(comp)) {
       coutE(InputArguments) << "PiecewiseInterpolation::ctor(" << GetName() << ") ERROR: component " << comp->GetName()
-             << " in first list is not of type RooAbsReal" << endl ;
+             << " in first list is not of type RooAbsReal" << std::endl ;
       RooErrorHandler::softAbort() ;
     }
     _highSet.add(*comp) ;
@@ -103,7 +119,7 @@ PiecewiseInterpolation::PiecewiseInterpolation(const char *name, const char *tit
   for (auto *comp : paramSet) {
     if (!dynamic_cast<RooAbsReal*>(comp)) {
       coutE(InputArguments) << "PiecewiseInterpolation::ctor(" << GetName() << ") ERROR: component " << comp->GetName()
-             << " in first list is not of type RooAbsReal" << endl ;
+             << " in first list is not of type RooAbsReal" << std::endl ;
       RooErrorHandler::softAbort() ;
     }
     _paramSet.add(*comp) ;
@@ -167,77 +183,15 @@ double PiecewiseInterpolation::evaluate() const
 
   if(_positiveDefinite && (sum<0)){
     sum = 0;
-    //     cout <<"sum < 0 forcing  positive definite"<<endl;
+    //     std::cout <<"sum < 0 forcing  positive definite"<< std::endl;
     //     int code = 1;
     //     RooArgSet* myset = new RooArgSet();
-    //     cout << "integral = " << analyticalIntegralWN(code, myset) << endl;
+    //     std::cout << "integral = " << analyticalIntegralWN(code, myset) << std::endl;
   } else if(sum<0){
-    cxcoutD(Tracing) <<"PiecewiseInterpolation::evaluate -  sum < 0, not forcing positive definite"<<endl;
+    cxcoutD(Tracing) <<"PiecewiseInterpolation::evaluate -  sum < 0, not forcing positive definite"<< std::endl;
   }
   return sum;
 
-}
-
-void PiecewiseInterpolation::translate(RooFit::Detail::CodeSquashContext &ctx) const
-{
-   std::size_t n = _interpCode.size();
-
-   std::string resName = "total_" + ctx.getTmpVarName();
-   for (std::size_t i = 0; i < n; ++i) {
-      if (_interpCode[i] != _interpCode[0]) {
-         coutE(InputArguments) << "FlexibleInterpVar::evaluate ERROR:  Code Squashing AD does not yet support having "
-                                  "different interpolation codes for the same class object "
-                               << endl;
-      }
-   }
-
-   // The PiecewiseInterpolation class is used in the context of HistFactory
-   // models, where is is always used the same way: all RooAbsReals in _lowSet,
-   // _histSet, and also nominal are 1D RooHistFuncs with with same structure.
-   //
-   // Therefore, we can make a big optimization: we get the bin index only once
-   // here in the generated code for PiecewiseInterpolation. Then, we also
-   // rearrange the histogram data in such a way that we can always pass the
-   // same arrays to the free function that implements the interpolation, just
-   // with a dynamic offset calculated from the bin index.
-   RooDataHist const &nomHist = dynamic_cast<RooHistFunc const &>(*_nominal).dataHist();
-   int nBins = nomHist.numEntries();
-   std::vector<double> valsNominal;
-   std::vector<double> valsLow;
-   std::vector<double> valsHigh;
-   for (int i = 0; i < nBins; ++i) {
-      valsNominal.push_back(nomHist.weight(i));
-   }
-   for (int i = 0; i < nBins; ++i) {
-      for (std::size_t iParam = 0; iParam < n; ++iParam) {
-         valsLow.push_back(dynamic_cast<RooHistFunc const &>(_lowSet[iParam]).dataHist().weight(i));
-         valsHigh.push_back(dynamic_cast<RooHistFunc const &>(_highSet[iParam]).dataHist().weight(i));
-      }
-   }
-   std::string idxName = ctx.getTmpVarName();
-   std::string valsNominalStr = ctx.buildArg(valsNominal);
-   std::string valsLowStr = ctx.buildArg(valsLow);
-   std::string valsHighStr = ctx.buildArg(valsHigh);
-   std::string nStr = std::to_string(n);
-   std::string code;
-
-   std::string lowName = ctx.getTmpVarName();
-   std::string highName = ctx.getTmpVarName();
-   std::string nominalName = ctx.getTmpVarName();
-   code += "unsigned int " + idxName + " = " + nomHist.calculateTreeIndexForCodeSquash(this, ctx, dynamic_cast<RooHistFunc const &>(*_nominal).variables()) + ";\n";
-   code += "double const* " + lowName + " = " + valsLowStr + " + " + nStr + " * " + idxName + ";\n";
-   code += "double const* " + highName + " = " + valsHighStr + " + " + nStr + " * " + idxName + ";\n";
-   code += "double " + nominalName + " = *(" + valsNominalStr + " + " + idxName + ");\n";
-
-   std::string funcCall = ctx.buildCall("RooFit::Detail::MathFuncs::flexibleInterp", _interpCode[0], _paramSet, n,
-                                        lowName, highName, 1.0, nominalName, 0.0);
-   code += "double " + resName + " = " + funcCall + ";\n";
-
-   if (_positiveDefinite)
-      code += resName + " = " + resName + " < 0 ? 0 : " + resName + ";\n";
-
-   ctx.addToCodeBody(this, code);
-   ctx.addResult(this, resName);
 }
 
 namespace {
@@ -294,7 +248,7 @@ bool PiecewiseInterpolation::setBinIntegrator(RooArgSet& allVars)
     temp->specialIntegratorConfig(true)->getConfigSection("RooBinIntegrator").setRealValue("numBins",nbins);
     return true;
   }else{
-    cout << "Currently BinIntegrator only knows how to deal with 1-d "<<endl;
+    std::cout << "Currently BinIntegrator only knows how to deal with 1-d "<< std::endl;
     return false;
   }
   return false;
@@ -307,12 +261,12 @@ Int_t PiecewiseInterpolation::getAnalyticalIntegralWN(RooArgSet& allVars, RooArg
                         const RooArgSet* normSet, const char* /*rangeName*/) const
 {
   /*
-  cout << "---------------------------\nin PiecewiseInterpolation get analytic integral " <<endl;
-  cout << "all vars = "<<endl;
+  std::cout << "---------------------------\nin PiecewiseInterpolation get analytic integral " << std::endl;
+  std::cout << "all vars = "<< std::endl;
   allVars.Print("v");
-  cout << "anal vars = "<<endl;
+  std::cout << "anal vars = "<< std::endl;
   analVars.Print("v");
-  cout << "normset vars = "<<endl;
+  std::cout << "normset vars = "<< std::endl;
   if(normSet2)
     normSet2->Print("v");
   */
@@ -332,7 +286,7 @@ Int_t PiecewiseInterpolation::getAnalyticalIntegralWN(RooArgSet& allVars, RooArg
   for (auto it = _paramSet.begin(); it != _paramSet.end(); ++it) {
     if (!_interpCode.empty() && _interpCode[it - _paramSet.begin()] != 0) {
         // can't factorize integral
-        cout << "can't factorize integral" << endl;
+        std::cout << "can't factorize integral" << std::endl;
         return 0;
      }
   }
@@ -380,7 +334,7 @@ Int_t PiecewiseInterpolation::getAnalyticalIntegralWN(RooArgSet& allVars, RooArg
 double PiecewiseInterpolation::analyticalIntegralWN(Int_t code, const RooArgSet* /*normSet2*/,const char* /*rangeName*/) const
 {
   /*
-  cout <<"Enter analytic Integral"<<endl;
+  std::cout <<"Enter analytic Integral"<< std::endl;
   printDirty(true);
   //  _nominal.arg().setDirtyInhibit(true) ;
   _nominal.arg().setShapeDirty() ;
@@ -400,7 +354,7 @@ double PiecewiseInterpolation::analyticalIntegralWN(Int_t code, const RooArgSet*
   /*
   RooAbsArg::setDirtyInhibit(true);
   printDirty(true);
-  cout <<"done setting dirty inhibit = true"<<endl;
+  std::cout <<"done setting dirty inhibit = true"<< std::endl;
 
   // old integral, only works for linear and not positive definite
   CacheElem* cache = (CacheElem*) _normIntMgr.getObjByIndex(code-1) ;
@@ -408,7 +362,7 @@ double PiecewiseInterpolation::analyticalIntegralWN(Int_t code, const RooArgSet*
 
  std::unique_ptr<RooArgSet> vars2( getParameters(RooArgSet()) );
  std::unique_ptr<RooArgSet> iset(  _normIntMgr.nameSet2ByIndex(code-1)->select(*vars2) );
- cout <<"iset = "<<endl;
+ std::cout <<"iset = "<< std::endl;
  iset->Print("v");
 
   double sum = 0;
@@ -421,10 +375,10 @@ double PiecewiseInterpolation::analyticalIntegralWN(Int_t code, const RooArgSet*
     for(int i=0; i<obs->numBins(); ++i){
       obs->setVal( obs->getMin() + (.5+i)*(obs->getMax()-obs->getMin())/obs->numBins());
       sum+=evaluate()*(obs->getMax()-obs->getMin())/obs->numBins();
-      cout << "obs = " << obs->getVal() << " sum = " << sum << endl;
+      std::cout << "obs = " << obs->getVal() << " sum = " << sum << std::endl;
     }
   } else{
-    cout <<"only know how to deal with 1 observable right now"<<endl;
+    std::cout <<"only know how to deal with 1 observable right now"<< std::endl;
   }
   */
 
@@ -443,8 +397,8 @@ double PiecewiseInterpolation::analyticalIntegralWN(Int_t code, const RooArgSet*
   /*
   RooAbsArg::setDirtyInhibit(false);
   printDirty(true);
-  cout <<"done"<<endl;
-  cout << "sum = " <<sum<<endl;
+  std::cout <<"done"<< std::endl;
+  std::cout << "sum = " <<sum<< std::endl;
   //return sum;
   */
 
@@ -469,7 +423,7 @@ double PiecewiseInterpolation::analyticalIntegralWN(Int_t code, const RooArgSet*
     nominal = value;
     i++;
   }
-  if(i==0 || i>1) { cout << "problem, wrong number of nominal functions"<<endl; }
+  if(i==0 || i>1) { std::cout << "problem, wrong number of nominal functions"<< std::endl; }
 
   // now get low/high variations
   // KC: old interp code with new iterator
@@ -545,13 +499,13 @@ double PiecewiseInterpolation::analyticalIntegralWN(Int_t code, const RooArgSet*
 
     } else {
       coutE(InputArguments) << "PiecewiseInterpolation::analyticalIntegralWN ERROR:  " << param->GetName()
-             << " with unknown interpolation code" << endl ;
+             << " with unknown interpolation code" << std::endl ;
     }
     ++i;
   }
   */
 
-  //  cout << "value = " << value <<endl;
+  //  std::cout << "value = " << value << std::endl;
   return value;
 }
 
@@ -576,7 +530,7 @@ void PiecewiseInterpolation::setAllInterpCodes(int code)
 void PiecewiseInterpolation::setInterpCodeForParam(int iParam, int code)
 {
    RooAbsArg const &param = _paramSet[iParam];
-   if (code < 0 || code > 5) {
+   if (code < 0 || code > 6) {
       coutE(InputArguments) << "PiecewiseInterpolation::setInterpCode ERROR: " << param.GetName()
                             << " with unknown interpolation code " << code << ", keeping current code "
                             << _interpCode[iParam] << std::endl;
@@ -598,7 +552,7 @@ void PiecewiseInterpolation::setInterpCodeForParam(int iParam, int code)
 
 void PiecewiseInterpolation::printAllInterpCodes(){
   for(unsigned int i=0; i<_interpCode.size(); ++i){
-    coutI(InputArguments) <<"interp code for " << _paramSet.at(i)->GetName() << " = " << _interpCode.at(i) <<endl;
+    coutI(InputArguments) <<"interp code for " << _paramSet.at(i)->GetName() << " = " << _interpCode.at(i) << std::endl;
   }
 }
 

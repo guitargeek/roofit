@@ -111,7 +111,7 @@ double RooExtendPdf::expectedEvents(const RooArgSet* nset) const
 
   if (_rangeName && (!nset || nset->empty())) {
     coutW(InputArguments) << "RooExtendPdf::expectedEvents(" << GetName() << ") WARNING: RooExtendPdf needs non-null normalization set to calculate fraction in range "
-           << _rangeName << ".  Results may be nonsensical" << endl ;
+           << _rangeName << ".  Results may be nonsensical" << std::endl ;
   }
 
   double nExp = _n ;
@@ -124,7 +124,7 @@ double RooExtendPdf::expectedEvents(const RooArgSet* nset) const
 
     if ( fracInt == 0. || _n == 0.) {
       coutW(Eval) << "RooExtendPdf(" << GetName() << ") WARNING: nExpected = " << _n << " / "
-        << fracInt << " for nset = " << (nset?*nset:RooArgSet()) << endl ;
+        << fracInt << " for nset = " << (nset?*nset:RooArgSet()) << std::endl ;
     }
 
     nExp /= fracInt ;
@@ -171,11 +171,4 @@ std::unique_ptr<RooAbsReal> RooExtendPdf::createExpectedEventsFunc(const RooArgS
       out->addOwnedComponents(std::move(pdfExpectedEvents));
    }
    return out;
-}
-
-
-void RooExtendPdf::translate(RooFit::Detail::CodeSquashContext &ctx) const
-{
-   // Use the result of the underlying pdf.
-   ctx.addResult(this, ctx.getResult(_pdf));
 }
