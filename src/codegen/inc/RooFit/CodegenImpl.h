@@ -155,6 +155,10 @@ struct CodegenIntegralImplCaller {
    }
 };
 
+class Dummy : public TObject {
+   ClassDefOverride(Dummy,0);
+};
+
 } // namespace Experimental
 } // namespace RooFit
 

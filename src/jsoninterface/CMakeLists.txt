@@ -9,22 +9,37 @@
 # @author Jonas Rembser, CERN
 ############################################################################
 
-ROOT_STANDARD_LIBRARY_PACKAGE(RooFitJSONInterface
-  HEADERS
+add_library(RooFitJSONInterface SHARED)
+
+set(sources_headers
     RooFit/Detail/JSONInterface.h
-  SOURCES
+)
+
+list(TRANSFORM sources_headers PREPEND "inc/")
+
+set(sources_cxx
     src/JSONInterface.cxx
     src/JSONParser.cxx
-  DICTIONARY_OPTIONS
-    "-writeEmptyRootPCM"
-  DEPENDENCIES
+)
+
+target_sources(RooFitJSONInterface PRIVATE ${sources_headers} ${sources_cxx})
+
+target_include_directories(RooFitJSONInterface PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
+target_link_libraries(RooFitJSONInterface PRIVATE
     Core
 )
 
-if(builtin_nlohmannjson)
-  target_include_directories(RooFitJSONInterface PRIVATE ${CMAKE_SOURCE_DIR}/builtins)
-else()
-  target_link_libraries(RooFitJSONInterface PRIVATE nlohmann_json::nlohmann_json)
-endif()
+# Install the libraries and header files.
+install(TARGETS RooFitJSONInterface
+        LIBRARY DESTINATION lib
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
-ROOT_ADD_TEST_SUBDIRECTORY(test)
+find_package(nlohmann_json)
+
+target_link_libraries(RooFitJSONInterface PRIVATE nlohmann_json::nlohmann_json)
+
+if(testing)
+  #add_subdirectory(test)
+endif()

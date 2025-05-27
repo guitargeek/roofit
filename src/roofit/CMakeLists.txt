@@ -9,14 +9,9 @@
 # @author Pere Mato, CERN
 ############################################################################
 
-set (EXTRA_DICT_OPTS)
-if (runtime_cxxmodules AND WIN32)
-  set (EXTRA_DICT_OPTS NO_CXXMODULE)
-endif()
+add_library(RooFit SHARED)
 
-ROOT_STANDARD_LIBRARY_PACKAGE(RooFit
-  HEADERS
-    RooMultiPdf.h
+set(sources_headers
     Roo2DKeysPdf.h
     RooArgusBG.h
     RooBCPEffDecay.h
@@ -56,10 +51,11 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFit
     RooLandau.h
     RooLognormal.h
     RooMathCoreReg.h
+    RooMomentMorph.h
     RooMomentMorphFunc.h
     RooMomentMorphFuncND.h
-    RooMomentMorph.h
     RooMultiBinomial.h
+    RooMultiPdf.h
     RooNDKeysPdf.h
     RooNonCPEigenDecay.h
     RooNovosibirsk.h
@@ -80,8 +76,11 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFit
     RooUniform.h
     RooVoigtian.h
     RooJohnson.h
-  SOURCES
-    src/RooMultiPdf.cxx
+)
+
+list(TRANSFORM sources_headers PREPEND "inc/")
+
+set(sources_cxx
     src/Roo2DKeysPdf.cxx
     src/RooArgusBG.cxx
     src/RooBCPEffDecay.cxx
@@ -125,6 +124,7 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFit
     src/RooMomentMorphFunc.cxx
     src/RooMomentMorphFuncND.cxx
     src/RooMultiBinomial.cxx
+    src/RooMultiPdf.cxx
     src/RooNDKeysPdf.cxx
     src/RooNonCPEigenDecay.cxx
     src/RooNovosibirsk.cxx
@@ -144,21 +144,41 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooFit
     src/RooUniform.cxx
     src/RooVoigtian.cxx
     src/RooJohnson.cxx
-  DICTIONARY_OPTIONS
-    "-writeEmptyRootPCM"
-  LINKDEF
-    LinkDef1.h
-  LIBRARIES
+)
+
+target_sources(RooFit PRIVATE ${sources_headers} ${sources_cxx})
+
+target_include_directories(RooFit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
+target_link_libraries(RooFit PRIVATE
     RooBatchCompute
-  DEPENDENCIES
+)
+
+target_link_libraries(RooFit PUBLIC
     Core
     RooFitCore
     Tree
     RIO
     Matrix
     MathCore
-  ${EXTRA_DICT_OPTS}
 )
+
+ROOT_GENERATE_DICTIONARY(G__RooFit ${sources_headers}
+    LINKDEF inc/LinkDef1.h
+    MODULE RooFit
+    OPTIONS --deep
+)
+
+# Install the dictionaries.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libRooFit_rdict.pcm
+              ${CMAKE_CURRENT_BINARY_DIR}/libRooFit.rootmap
+        DESTINATION lib)
+
+# Install the libraries and header files.
+install(TARGETS RooFit
+        LIBRARY DESTINATION lib
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 # For recent clang, this can facilitate auto-vectorisation.
 # In RooFit, the errno side effect is not needed, anyway:
@@ -166,4 +186,6 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   target_compile_options(RooFit PUBLIC -fno-math-errno)
 endif()
 
-ROOT_ADD_TEST_SUBDIRECTORY(test)
+if(testing)
+  add_subdirectory(test)
+endif()

@@ -14,8 +14,9 @@ if (runtime_cxxmodules AND WIN32)
   set (EXTRA_DICT_OPTS NO_CXXMODULE)
 endif()
 
-ROOT_STANDARD_LIBRARY_PACKAGE(RooStats
-  HEADERS
+add_library(RooStats SHARED)
+
+set(sources_headers
     RooStats/AsymptoticCalculator.h
     RooStats/BayesianCalculator.h
     RooStats/BernsteinCorrection.h
@@ -73,7 +74,11 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooStats
     RooStats/ToyMCSampler.h
     RooStats/UniformProposal.h
     RooStats/UpperLimitMCSModule.h
-  SOURCES
+)
+
+list(TRANSFORM sources_headers PREPEND "inc/")
+
+set(sources_cxx
     src/AsymptoticCalculator.cxx
     src/BayesianCalculator.cxx
     src/BernsteinCorrection.cxx
@@ -119,9 +124,17 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooStats
     src/ToyMCSampler.cxx
     src/UniformProposal.cxx
     src/UpperLimitMCSModule.cxx
-  DICTIONARY_OPTIONS
-    "-writeEmptyRootPCM"
-  DEPENDENCIES
+)
+
+target_sources(RooStats PRIVATE ${sources_headers} ${sources_cxx})
+
+target_include_directories(RooStats PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
+target_link_libraries(RooStats PRIVATE
+    RooBatchCompute
+)
+
+target_link_libraries(RooStats PUBLIC
     Core
     RooFit
     RooFitCore
@@ -134,7 +147,25 @@ ROOT_STANDARD_LIBRARY_PACKAGE(RooStats
     Foam
     Graf
     Gpad
-  ${EXTRA_DICT_OPTS}
 )
 
-ROOT_ADD_TEST_SUBDIRECTORY(test)
+ROOT_GENERATE_DICTIONARY(G__RooStats ${sources_headers}
+    LINKDEF inc/LinkDef.h
+    MODULE RooStats
+    OPTIONS --deep
+)
+
+# Install the dictionaries.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libRooStats_rdict.pcm
+              ${CMAKE_CURRENT_BINARY_DIR}/libRooStats.rootmap
+        DESTINATION lib)
+
+# Install the libraries and header files.
+install(TARGETS RooStats
+        LIBRARY DESTINATION lib
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
+
+if(testing)
+  add_subdirectory(test)
+endif()

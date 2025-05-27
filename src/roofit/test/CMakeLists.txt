@@ -31,4 +31,4 @@ else()
   ROOT_ADD_TEST(test-fit-testRooFit COMMAND testRooFit)
 endif()
 
-add_subdirectory(vectorisedPDFs)
+#add_subdirectory(vectorisedPDFs)

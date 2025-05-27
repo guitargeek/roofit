@@ -9,15 +9,45 @@
 # @author Pere Mato, CERN
 ############################################################################
 
-ROOT_STANDARD_LIBRARY_PACKAGE(RooFitCodegen
-  HEADERS
+add_library(RooFitCodegen SHARED)
+
+set(sources_headers
     RooFit/CodegenImpl.h
-  SOURCES
+)
+
+list(TRANSFORM sources_headers PREPEND "inc/")
+
+set(sources_cxx
     src/CodegenImpl.cxx
-  DICTIONARY_OPTIONS
-    "-writeEmptyRootPCM"
-  DEPENDENCIES
+)
+
+target_sources(RooFitCodegen PRIVATE ${sources_headers} ${sources_cxx})
+
+target_include_directories(RooFitCodegen PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
+target_link_libraries(RooFitCodegen PRIVATE
     RooFit
     RooFitCore
     HistFactory
 )
+
+target_link_libraries(RooFitCodegen PUBLIC
+    RooFitCore
+)
+
+ROOT_GENERATE_DICTIONARY(G__RooFitCodegen ${sources_headers}
+    LINKDEF LinkDef.h
+    MODULE RooFitCodegen
+    OPTIONS --deep -writeEmptyRootPCM
+)
+
+# Install the dictionaries.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libRooFitCodegen_rdict.pcm
+              ${CMAKE_CURRENT_BINARY_DIR}/libRooFitCodegen.rootmap
+        DESTINATION lib)
+
+# Install the libraries and header files.
+install(TARGETS RooFitCodegen
+        LIBRARY DESTINATION lib
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
