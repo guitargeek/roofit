@@ -116,6 +116,25 @@ install(FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${prepareHistFactory_script}
                             WORLD_EXECUTE WORLD_READ
                 DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+# The script takes HistFactorySchema.dtd from `root-config --etcdir`. That is
+# the RooFit-less ROOT installation, which has no copy of it, and root-config
+# reports a path baked in at its build time, so $ROOTSYS cannot redirect it.
+# Point the copy in <build>/bin at the DTD that src/CMakeLists.txt stages
+# instead, so that the HistFactory tutorials can run from the build tree. Only
+# this copy is patched: the installed script stays the one ROOT ships, since
+# `make install` puts the DTD in the install tree's etcdir where it belongs.
+if(NOT MSVC)
+  file(READ ${CMAKE_CURRENT_SOURCE_DIR}/config/${prepareHistFactory_script} prepare_script)
+  string(REPLACE "ROOTETCDIR=`root-config --etcdir`"
+                 "ROOTETCDIR=${CMAKE_BINARY_DIR}/etc"
+                 prepare_script "${prepare_script}")
+  file(GENERATE OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${prepareHistFactory_script}
+       CONTENT "${prepare_script}"
+       FILE_PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
+                        GROUP_EXECUTE GROUP_READ
+                        WORLD_EXECUTE WORLD_READ)
+endif()
+
 if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
   target_sources(
       HistFactory

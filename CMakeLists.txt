@@ -59,6 +59,11 @@ if(pyroot)
   add_subdirectory(python)
 endif()
 
+# The tutorials are not built, only run as tests.
+if(testing)
+  add_subdirectory(tutorials)
+endif()
+
 # The tests of the ROOT build tree find everything they need under $ROOTSYS: the
 # libraries that are not linked but loaded at runtime (libRooBatchCompute_GENERIC
 # and libRooFitMore) together with their .rootmap and .pcm files in $ROOTSYS/lib,
@@ -104,9 +109,21 @@ if(testing)
     endif()
     # <build>/lib holds the libraries and, like $ROOTSYS/lib in a ROOT
     # installation, the Python modules, so it goes on both search paths.
+    #
+    # $ROOTSYS/lib goes on PYTHONPATH as well, so that "import ROOT" works even
+    # when the caller has not sourced thisroot.sh. Our <build>/lib/ROOT/ has no
+    # __init__.py and is therefore only a namespace package, which Python ranks
+    # below the regular ROOT package of the installation: "import ROOT" always
+    # resolves to the real one, and sitecustomize.py then grafts our
+    # pythonizations onto it.
+    # <build>/bin goes on PATH because some tests and tutorials shell out to the
+    # executables built here: the HistFactory tutorials run prepareHistFactory
+    # and hist2workspace, which $ROOTSYS/bin does not have in a RooFit-less ROOT.
     set(test_environment
         "${library_path_var}=path_list_prepend:${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
-        "PYTHONPATH=path_list_prepend:${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+        "PYTHONPATH=path_list_prepend:${ROOT_LIBRARY_DIR}"
+        "PYTHONPATH=path_list_prepend:${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+        "PATH=path_list_prepend:${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
     roofit_collect_targets(${CMAKE_CURRENT_SOURCE_DIR}/src all_targets)
 
@@ -139,6 +156,7 @@ if(testing)
 
     list(REMOVE_DUPLICATES test_environment)
     roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/src "${test_environment}")
+    roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/tutorials "${test_environment}")
     if(pyroot)
       roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/python "${test_environment}")
     endif()
