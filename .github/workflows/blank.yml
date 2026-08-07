@@ -48,7 +48,7 @@ jobs:
           source root/bin/thisroot.sh
           mkdir build
           cd build
-          cmake -Dtesting=ON -Dmathmore=ON -DCMAKE_INSTALL_PREFIX=../install -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+          cmake -Dtesting=ON -Dmathmore=ON -Dclad=ON -DCMAKE_INSTALL_PREFIX=../install -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
           cmake --build . --target install -j4
 
       - name: Test Project
