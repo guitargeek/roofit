@@ -54,20 +54,6 @@
               --replace-fail \
                 'if(NOT MSVC AND CMAKE_VERSION VERSION_LESS 3.31.1)' \
                 'if(NOT MSVC)'
-
-            # ROOT 6.40's Math/CladDerivator.h unconditionally defines clad pullbacks for
-            # TMVA SOFIE's Gemm_Call. With -Dtmva=OFF there is no ::TMVA namespace, the
-            # interpreter fails to parse the header, and RooFit's automatic differentiation
-            # breaks. Upstream moved this block into tmva/sofie after 6.40.
-            substituteInPlace math/mathcore/inc/Math/CladDerivator.h \
-              --replace-fail \
-                'namespace TMVA::Experimental::SOFIE {' \
-                '#if __has_include(<TMVA/SOFIE_common.hxx>)
-            namespace TMVA::Experimental::SOFIE {' \
-              --replace-fail \
-                '} // namespace TMVA::Experimental::SOFIE' \
-                '} // namespace TMVA::Experimental::SOFIE
-            #endif'
           '';
           # The TestSupport library links against GTest::gtest, so ROOT needs to
           # find GTest at build time.

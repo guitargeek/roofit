@@ -55,6 +55,17 @@ find_package(Python3 COMPONENTS Interpreter)
 
 add_subdirectory(src)
 
+# compat/ holds headers that shadow headers of the ROOT installation to work
+# around problems with the ROOT versions this repository is built against. They
+# are attached to RooFitCore so that they end up on the include path of every
+# package and every test, and they are installed next to the RooFit headers so
+# that the install tree behaves like the build tree. See the files themselves
+# for what they fix; each one falls back to the ROOT header with #include_next.
+target_include_directories(RooFitCore PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/compat>
+  $<INSTALL_INTERFACE:include>)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/compat/" DESTINATION "include")
+
 if(pyroot)
   add_subdirectory(python)
 endif()
