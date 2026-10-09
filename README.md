@@ -225,13 +225,21 @@ This has a few consequences that are good for development:
 * The clad of the ROOT installation stays available in the interpreter, e.g.
   for the tutorials and for `#include <Math/CladDerivator.h>` in macros.
 
-The price is one compiler process per derivative, about two seconds of which
-most is spent parsing the headers. Fits of the same model generate the same
-code up to the numbering of the functions, so the compiled libraries are
-cached per process with that numbering canonicalized: toy studies and repeated
-fits compile once. A precompiled header for the common prefix would cut the
-rest, but it would also hide the `#pragma clad` directives of the headers from
-clad, so it is not done.
+The price is one compiler process per derivative. Two things keep that in
+check:
+
+* Fits of the same model generate the same code up to the numbering of the
+  functions and the comments, which carry the current values of the nodes. The
+  compiled libraries are cached per process, keyed on the code with the
+  numbering canonicalized and the comments stripped, so toy studies and
+  repeated fits of a model compile once.
+* Parsing the headers takes a couple of seconds, the function itself a fraction
+  of that. The headers are therefore precompiled once per process, and each
+  translation unit is compiled on top of that precompiled header. One header
+  stays out of it: `RooFit/Detail/MathFuncs.h` carries a `#pragma clad`
+  directive, which the clad plugin only sees while the header is lexed, and a
+  precompiled header is not lexed again. The headers that it includes are
+  precompiled instead, see `cladPreamble()` in `RooEvaluatorWrapper.cxx`.
 
 ### Building
 

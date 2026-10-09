@@ -16,6 +16,8 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -53,6 +55,105 @@ bool isCladIncludeDir(fs::path const &dir)
    // directory is a complete set of headers and not only the source tree.
    return fs::exists(dir / "clad" / "Differentiator" / "Differentiator.h") &&
           fs::exists(dir / "clad" / "Differentiator" / "Version.inc");
+}
+
+/// The code without its comments, and with each run of whitespace outside of
+/// literals reduced to a single space. The compile cache is keyed on this, so
+/// that code that differs only in comments compiles to the same library:
+/// RooFit's codegen writes the current values of the nodes into comments, and
+/// those change from fit to fit while the code stays the same. String and
+/// character literals are kept as they are, including raw string literals
+/// (only with the plain R prefix: an encoding prefix like u8R is not
+/// recognized).
+std::string cacheKey(std::string const &code)
+{
+   const std::size_t n = code.size();
+   std::string out;
+   out.reserve(n);
+   std::size_t i = 0;
+   auto isIdentifierChar = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+   auto addSpace = [&out] {
+      if (!out.empty() && out.back() != ' ') {
+         out += ' ';
+      }
+   };
+   while (i < n) {
+      const char c = code[i];
+      if (std::isspace(static_cast<unsigned char>(c))) {
+         addSpace();
+         ++i;
+         continue;
+      }
+      if (c == 'R' && i + 1 < n && code[i + 1] == '"' && (i == 0 || !isIdentifierChar(code[i - 1]))) {
+         std::size_t open = code.find('(', i + 2);
+         if (open != std::string::npos) {
+            std::string close = ")" + code.substr(i + 2, open - i - 2) + "\"";
+            std::size_t end = code.find(close, open + 1);
+            if (end != std::string::npos) {
+               end += close.size();
+               out.append(code, i, end - i);
+               i = end;
+               continue;
+            }
+         }
+      }
+      if (c == '"' || c == '\'') {
+         std::size_t j = i + 1;
+         while (j < n && code[j] != c && code[j] != '\n') {
+            if (code[j] == '\\') {
+               ++j;
+            }
+            ++j;
+         }
+         j = std::min(j + 1, n);
+         out.append(code, i, j - i);
+         i = j;
+         continue;
+      }
+      if (c == '/' && i + 1 < n && code[i + 1] == '/') {
+         i = code.find('\n', i);
+         if (i == std::string::npos) {
+            break;
+         }
+         continue;
+      }
+      if (c == '/' && i + 1 < n && code[i + 1] == '*') {
+         i = code.find("*/", i + 2);
+         if (i == std::string::npos) {
+            break;
+         }
+         i += 2;
+         addSpace();
+         continue;
+      }
+      out += c;
+      ++i;
+   }
+   if (!out.empty() && out.back() == ' ') {
+      out.pop_back();
+   }
+   return out;
+}
+
+/// Runs the compiler command, with its output going to `logPath`, and returns
+/// the output. Throws std::runtime_error with the output if the command fails.
+std::string runCompiler(std::string const &command, std::string const &logPath, std::string const &what)
+{
+   int status = std::system((command + " > " + quote(logPath) + " 2>&1").c_str());
+
+   std::ifstream log{logPath};
+   std::stringstream ss;
+   ss << log.rdbuf();
+   std::string output = ss.str();
+
+   if (status != 0) {
+      std::stringstream msg;
+      msg << "The builtin clad could not compile " << what << ". The compiler says:\n"
+          << output << "\nThe command was:\n"
+          << command << "\n";
+      throw std::runtime_error(msg.str());
+   }
+   return output;
 }
 
 /// The working directory, created on first use and removed at exit unless the
@@ -125,15 +226,16 @@ std::string const &workDir()
    return dir.path();
 }
 
-std::string compileCommand(std::string const &source, std::string const &output)
+namespace {
+
+/// The compiler with the flags that both the libraries and the precompiled
+/// headers are compiled with. The two have to match, or clang rejects the
+/// precompiled header.
+std::string compilerWithFlags()
 {
    std::stringstream cmd;
-   cmd << quote(compiler()) << " -std=c++" << ROOFIT_CLAD_CXX_STANDARD << " -O2 -g -fPIC -shared"
+   cmd << quote(compiler()) << " -std=c++" << ROOFIT_CLAD_CXX_STANDARD << " -O2 -g -fPIC"
        << " -fvisibility=hidden -fvisibility-inlines-hidden";
-#ifdef __APPLE__
-   // Like for ACLiC: the code calls into libraries that are already loaded.
-   cmd << " -undefined dynamic_lookup";
-#endif
    cmd << " -fplugin=" << quote(pluginPath())
        << " -Xclang -plugin-arg-clad -Xclang -fgenerated-source-dir=" << workDir();
    for (std::string const &dir : includeDirs()) {
@@ -144,11 +246,63 @@ std::string compileCommand(std::string const &source, std::string const &output)
    if (const char *extra = std::getenv("ROOFIT_CLAD_EXTRA_FLAGS")) {
       cmd << " " << extra;
    }
+   return cmd.str();
+}
+
+} // namespace
+
+std::string compileCommand(std::string const &source, std::string const &output, std::string const &pch)
+{
+   std::stringstream cmd;
+   cmd << compilerWithFlags() << " -shared";
+#ifdef __APPLE__
+   // Like for ACLiC: the code calls into libraries that are already loaded.
+   cmd << " -undefined dynamic_lookup";
+#endif
+   if (!pch.empty()) {
+      cmd << " -include-pch " << quote(pch);
+   }
    cmd << " " << quote(source) << " -o " << quote(output);
    return cmd.str();
 }
 
-Library::Library(std::string const &name, std::string const &code)
+std::string precompileCommand(std::string const &header, std::string const &output)
+{
+   return compilerWithFlags() + " -x c++-header " + quote(header) + " -o " + quote(output);
+}
+
+PrecompiledHeader::PrecompiledHeader(std::string const &name, std::string const &code)
+{
+   fs::path dir = workDir();
+   _headerPath = (dir / (name + ".h")).string();
+   _path = (dir / (name + ".pch")).string();
+   std::string logPath = (dir / (name + ".pch.log")).string();
+
+   {
+      std::ofstream out{_headerPath};
+      // The sources include the header again, see Library::Library(), which
+      // the pragma turns into a no-op: the precompiled header remembers it.
+      out << "#pragma once\n" << code;
+   }
+
+   _command = precompileCommand(_headerPath, _path);
+   _compilerOutput = runCompiler(_command, logPath, _headerPath);
+}
+
+std::shared_ptr<PrecompiledHeader> PrecompiledHeader::compile(std::string const &name, std::string const &code)
+{
+   static std::mutex mutex;
+   static std::unordered_map<std::string, std::shared_ptr<PrecompiledHeader>> cache;
+   std::lock_guard<std::mutex> guard{mutex};
+   auto &pch = cache[cacheKey(code)];
+   if (!pch) {
+      pch = std::make_shared<PrecompiledHeader>(name, code);
+   }
+   return pch;
+}
+
+Library::Library(std::string const &name, std::string const &code, std::shared_ptr<PrecompiledHeader const> pch)
+   : _pch{std::move(pch)}
 {
    fs::path dir = workDir();
    _sourcePath = (dir / (name + ".cxx")).string();
@@ -157,26 +311,16 @@ Library::Library(std::string const &name, std::string const &code)
 
    {
       std::ofstream out{_sourcePath};
+      // The source includes the header of the precompiled header, so that it
+      // is complete on its own, for anyone who wants to compile it by hand.
+      if (_pch) {
+         out << "#include " << quote(_pch->headerPath()) << "\n";
+      }
       out << code;
    }
 
-   _command = compileCommand(_sourcePath, _path) + " > " + quote(logPath) + " 2>&1";
-   int status = std::system(_command.c_str());
-
-   {
-      std::ifstream log{logPath};
-      std::stringstream ss;
-      ss << log.rdbuf();
-      _compilerOutput = ss.str();
-   }
-
-   if (status != 0) {
-      std::stringstream msg;
-      msg << "The builtin clad could not compile " << _sourcePath << ". The compiler says:\n"
-          << _compilerOutput << "\nThe command was:\n"
-          << _command << "\n";
-      throw std::runtime_error(msg.str());
-   }
+   _command = compileCommand(_sourcePath, _path, _pch ? _pch->path() : std::string{});
+   _compilerOutput = runCompiler(_command, logPath, _sourcePath);
 
    _handle = dlopen(_path.c_str(), RTLD_NOW | RTLD_LOCAL);
    if (!_handle) {
@@ -191,14 +335,16 @@ Library::~Library()
    }
 }
 
-std::shared_ptr<Library> Library::compile(std::string const &name, std::string const &code)
+std::shared_ptr<Library>
+Library::compile(std::string const &name, std::string const &code, std::shared_ptr<PrecompiledHeader const> pch)
 {
    static std::mutex mutex;
    static std::unordered_map<std::string, std::shared_ptr<Library>> cache;
    std::lock_guard<std::mutex> guard{mutex};
-   auto &lib = cache[code];
+   std::string key = (pch ? pch->path() : std::string{}) + "\n" + cacheKey(code);
+   auto &lib = cache[key];
    if (!lib) {
-      lib = std::make_shared<Library>(name, code);
+      lib = std::make_shared<Library>(name, code, std::move(pch));
    }
    return lib;
 }
