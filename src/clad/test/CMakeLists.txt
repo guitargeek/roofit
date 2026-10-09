@@ -1,0 +1,1 @@
+ROOT_ADD_GTEST(testBuiltinClad testBuiltinClad.cxx LIBRARIES RooFitClad)

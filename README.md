@@ -171,6 +171,86 @@ cd build
 ctest -R minuit2
 ```
 
+## Clad
+
+This repository also contains [clad](https://github.com/vgvassilev/clad), the
+Clang plugin for automatic differentiation that RooFit's `codegen` backend uses
+for its gradients and Hessians. By default, RooFit takes its derivatives from
+this builtin clad, so that RooFit and clad can be developed together. Configure
+with `-Dbuiltin_clad=OFF` to use the clad inside the ROOT installation instead,
+which then has to be a ROOT built with clad.
+
+`clad/` is a copy of the clad repository and is kept identical to it, so that
+syncing is a plain copy of the directory and changes made here apply to clad
+as they are. All of clad's targets, the `clad.so` plugin, `cladDifferentiator`
+and `clad-tblgen`, are part of this build, so edits anywhere in `clad/` compile
+on `cmake --build`. Until they are upstream, the copy carries two changes that
+this integration needed:
+
+* `clad/CMakeLists.txt`: the `CLAD_BUILT_STANDALONE` opt-in, which lets a
+  host project embed clad with `add_subdirectory()`.
+* `clad/tools/ClangPlugin.cpp`: `#pragma clad checkpoint loop` in an included
+  header was attributed to functions of the main file, because the pragma
+  locations were compared by raw source offset instead of in translation unit
+  order. That broke `RooFit::Detail::MathFuncs::constraintSum()` as soon as
+  the generated code lived in a file of its own.
+
+### Why the builtin clad does not run inside the interpreter
+
+ROOT links clad statically into libCling and hides all of its Clang and LLVM
+symbols. A clad built here can therefore neither bind to the Clang inside the
+interpreter nor register itself as a plugin there, so, unlike the builtin
+Minuit 2, it cannot be a renamed copy that slots into the same place.
+
+Instead, it works the way ACLiC works, with clad in the picture. When the
+`codegen` backend needs a derivative, RooFit writes the generated function and
+the clad request to a file, compiles that with `clang++` and the `clad.so`
+plugin into a shared library in a separate process, loads the library, and
+takes the derivative from it as a plain symbol. The primal function keeps
+coming from the interpreter as before. The compile-and-load step is
+`RooFit::Detail::BuiltinClad::Library` in
+[`src/clad/inc/RooFit/Detail/BuiltinClad.h`](src/clad/inc/RooFit/Detail/BuiltinClad.h),
+and the RooFit side of it is `RooFuncWrapper` in
+`src/roofitcore/src/RooEvaluatorWrapper.cxx`. The design and its trade-offs
+are documented in [`src/clad/CMakeLists.txt`](src/clad/CMakeLists.txt).
+
+This has a few consequences that are good for development:
+
+* The builtin clad can be built against any LLVM that clad supports, which
+  need not be the LLVM inside ROOT. The flake uses LLVM 22.
+* The generated source, the code that clad generated, and the compiled library
+  with debug info are all files on disk, in a temporary directory that is
+  removed at exit. Set `ROOFIT_CLAD_WORKDIR=<dir>` to keep them in `<dir>`,
+  and `ROOFIT_CLAD_EXTRA_FLAGS` to pass extra flags to the compiler.
+* The clad of the ROOT installation stays available in the interpreter, e.g.
+  for the tutorials and for `#include <Math/CladDerivator.h>` in macros.
+
+The price is one compiler process per derivative, about two seconds of which
+most is spent parsing the headers. Fits of the same model generate the same
+code up to the numbering of the functions, so the compiled libraries are
+cached per process with that numbering canonicalized: toy studies and repeated
+fits compile once. A precompiled header for the common prefix would cut the
+rest, but it would also hide the `#pragma clad` directives of the headers from
+clad, so it is not done.
+
+### Building
+
+The build needs the CMake packages of LLVM and Clang, and the `clang++` that
+belongs to them:
+
+```bash
+cmake -DLLVM_DIR=<llvm>/lib/cmake/llvm -DClang_DIR=<llvm>/lib/cmake/clang ..
+```
+
+`clang++` is looked for next to the LLVM tools; pass `-Dclad_compiler=<path>`
+if it lives elsewhere. The nix dev shell sets all of this up, see
+`$CONFIGURE_ARGS`. With `-Dclad_tests=ON`, clad's own unit tests and lit tests
+are built too and available as the `check-clad` target.
+
+The RooFit tests that exercise the builtin clad are the ones of the `codegen`
+backend, e.g. `testRooFuncWrapper` and `test-stressroofit-codegen`, and
+`testBuiltinClad` tests the compile-and-load step on its own.
+
 ## What you can expect from this repo in the future
 
 * Integration of the RooFit parts from [roottest](https://github.com/root-project/roottest/tree/master/root/roofitstats) and [rootbench](https://github.com/root-project/rootbench/tree/master/root/roofit).

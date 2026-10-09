@@ -34,9 +34,13 @@ class RooAbsRealLValue;
 /// and `cat::state` category state references). processFormula() normalizes
 /// an expression to the `x[i]`-only dialect that the RooFormulaEvaluator
 /// backends understand; the other functions operate on the normalized form.
+class TFormula;
+
 namespace RooFormulaUtils {
 
 std::string processFormula(std::string formula, RooArgList const &varList, std::string const &callerName);
+
+std::string clingFunctionCode(TFormula const &formula);
 
 std::string reconstructFormula(std::string internalRepr, RooArgList const &args,
                                const char *fixedReplacement = nullptr);

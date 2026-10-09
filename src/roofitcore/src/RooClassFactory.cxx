@@ -41,6 +41,8 @@ instantiate objects.
 #include "RooAbsPdf.h"
 #include "RooFitImplHelpers.h"
 
+#include <filesystem>
+
 #include <ROOT/StringUtils.hxx>
 
 #include <strlcpy.h>
@@ -687,8 +689,14 @@ CLASS_NAME::CLASS_NAME(const char *name, const char *title,
       }
    }
 
+   // The builtin clad compiles the generated code outside of the interpreter,
+   // and needs the definition of CLASS_NAME_evaluate() from the class header
+   // for that. The header is written to the working directory, see below.
+   std::string headerPath = std::filesystem::absolute(className + ".h").string();
+
    cf << "void RooFit::Experimental::codegenImpl(CLASS_NAME &arg, RooFit::Experimental::CodegenContext &ctx)\n"
       << "{\n"
+      << "   ctx.addSupportCode(\"CLASS_NAME\", \"#include \\\"" << headerPath << "\\\"\\n\");\n"
       << "   ctx.addResult(&arg, ctx.buildCall(\"CLASS_NAME_evaluate\", " << varsGetters.str() << "));\n"
       <<"}\n";
   }

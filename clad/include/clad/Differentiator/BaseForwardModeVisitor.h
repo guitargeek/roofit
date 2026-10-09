@@ -1,0 +1,224 @@
+#ifndef CLAD_BASE_FORWARD_MODE_VISITOR_H
+#define CLAD_BASE_FORWARD_MODE_VISITOR_H
+
+#include "Compatibility.h"
+#include "VisitorBase.h"
+#include "clang/AST/Expr.h"
+#include "clang/AST/ExprCXX.h"
+#include "clang/AST/OpenMPClause.h"
+#include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/StmtOpenMP.h"
+#include "clang/AST/StmtVisitor.h"
+#include "clang/Sema/Sema.h"
+
+#include "llvm/ADT/SmallVector.h"
+
+#include "clad/Differentiator/DerivativeBuilder.h"
+
+#include <array>
+#include <stack>
+#include <unordered_map>
+
+#ifndef NDEBUG
+#include <exception> // for std::terminate
+#endif
+
+namespace clad {
+/// A visitor for processing the function code in forward mode.
+/// Used to compute derivatives by clad::differentiate.
+/// \ingroup visitors
+class BaseForwardModeVisitor
+    : public clang::ConstStmtVisitor<BaseForwardModeVisitor, StmtDiff>,
+      public clang::ConstOMPClauseVisitor<BaseForwardModeVisitor,
+                                          clang::OMPClause*>,
+      public VisitorBase {
+  unsigned m_IndependentVarIndex = ~0;
+
+protected:
+  const clang::ValueDecl* m_IndependentVar = nullptr;
+
+public:
+  BaseForwardModeVisitor(DerivativeBuilder& builder,
+                         const DiffRequest& request);
+  ~BaseForwardModeVisitor() override;
+
+  ///\brief Produces the first derivative of a given function.
+  ///
+  ///\returns The differentiated and potentially created enclosing
+  /// context.
+  ///
+  DerivativeAndOverload Derive() override;
+
+  StmtDiff Visit(const clang::Stmt* S) {
+    m_CurVisitedStmt = S;
+#ifndef NDEBUG
+    // Enable testing of the pretty printing of the state when clad crashes.
+    if (const char* Env = std::getenv("CLAD_FORCE_CRASH"))
+      std::terminate();
+#endif // NDEBUG
+    return clang::ConstStmtVisitor<BaseForwardModeVisitor, StmtDiff>::Visit(S);
+  }
+
+  clang::OMPClause* Visit(const clang::OMPClause* C) {
+    return clang::ConstOMPClauseVisitor<BaseForwardModeVisitor,
+                                        clang::OMPClause*>::Visit(C);
+  }
+
+  virtual void ExecuteInsidePushforwardFunctionBlock() {}
+
+  /// \returns \p read, the derivative expression dereferencing \p tangent,
+  /// wrapped so that it evaluates to \p zero instead of dereferencing a null
+  /// \p tangent. \p ptr is the primal pointer expression \p tangent is the
+  /// tangent of; the request tells whether its tangent may be null, and \p read
+  /// is returned unchanged when it cannot be.
+  clang::Expr* GuardNullTangentRead(const clang::Expr* ptr,
+                                    clang::Expr* tangent, clang::Expr* read,
+                                    clang::Expr* zero);
+
+  /// \returns the declaration \p E is derived from by pointer arithmetic, or
+  /// null when \p E is not rooted in one. `xlArr + 1`, `xlArr += 1` and
+  /// `xlArr++` all yield `xlArr`; plain `q = xlArr + 1` does not, being rooted
+  /// in its right-hand side. A tangent pointer is null at its root, so the
+  /// root is what a null check has to test.
+  [[nodiscard]] static const clang::DeclRefExpr*
+  getPointerArithmeticRoot(const clang::Expr* E);
+
+  /// \returns \p tangent, the tangent of the primal pointer expression \p ptr,
+  /// rewritten to evaluate to a null pointer whenever the tangent it is derived
+  /// from is null. Returned unchanged unless \p ptr is rooted in a pointer
+  /// whose tangent may be null.
+  ///
+  /// A null tangent spells "the derivative of this argument is identically
+  /// zero" and readers null check it, but `nullptr + 1` is not null, so
+  /// arithmetic makes a reader sail past the check and dereference a small
+  /// integer. Callers apply this wherever a derived tangent outlives the
+  /// expression that built it.
+  clang::Expr* KeepTangentNullness(const clang::Expr* ptr,
+                                   clang::Expr* tangent);
+
+  virtual StmtDiff
+  VisitArraySubscriptExpr(const clang::ArraySubscriptExpr* ASE);
+  StmtDiff VisitBinaryOperator(const clang::BinaryOperator* BinOp);
+  StmtDiff VisitCallExpr(const clang::CallExpr* CE);
+  StmtDiff VisitCompoundStmt(const clang::CompoundStmt* CS);
+  StmtDiff VisitConditionalOperator(const clang::ConditionalOperator* CO);
+  StmtDiff VisitCXXBoolLiteralExpr(const clang::CXXBoolLiteralExpr* BL);
+  StmtDiff VisitCharacterLiteral(const clang::CharacterLiteral* CL);
+  StmtDiff VisitStringLiteral(const clang::StringLiteral* SL);
+  StmtDiff VisitCXXDefaultArgExpr(const clang::CXXDefaultArgExpr* DE);
+  StmtDiff VisitDeclRefExpr(const clang::DeclRefExpr* DRE);
+  StmtDiff VisitDeclStmt(const clang::DeclStmt* DS);
+  virtual StmtDiff VisitFloatingLiteral(const clang::FloatingLiteral* FL);
+  StmtDiff VisitForStmt(const clang::ForStmt* FS);
+  StmtDiff VisitIfStmt(const clang::IfStmt* If);
+  StmtDiff VisitImplicitCastExpr(const clang::ImplicitCastExpr* ICE);
+  StmtDiff VisitCXXFunctionalCastExpr(const clang::CXXFunctionalCastExpr* FCE);
+  StmtDiff VisitCStyleCastExpr(const clang::CStyleCastExpr* CSCE);
+  StmtDiff VisitCXXNamedCastExpr(const clang::CXXNamedCastExpr* NCE);
+  StmtDiff VisitInitListExpr(const clang::InitListExpr* ILE);
+  virtual StmtDiff VisitIntegerLiteral(const clang::IntegerLiteral* IL);
+  StmtDiff VisitMemberExpr(const clang::MemberExpr* ME);
+  StmtDiff VisitParenExpr(const clang::ParenExpr* PE);
+  virtual StmtDiff VisitReturnStmt(const clang::ReturnStmt* RS);
+  StmtDiff VisitStmt(const clang::Stmt* S);
+  StmtDiff VisitUnaryOperator(const clang::UnaryOperator* UnOp);
+  // Decl is not Stmt, so it cannot be visited directly.
+  virtual DeclDiff<clang::VarDecl>
+  DifferentiateVarDecl(const clang::VarDecl* VD);
+  virtual DeclDiff<clang::VarDecl>
+  DifferentiateVarDecl(const clang::VarDecl* VD, bool ignoreInit);
+  StmtDiff VisitCXXForRangeStmt(const clang::CXXForRangeStmt* FRS);
+  StmtDiff VisitWhileStmt(const clang::WhileStmt* WS);
+  StmtDiff VisitDoStmt(const clang::DoStmt* DS);
+  StmtDiff VisitContinueStmt(const clang::ContinueStmt* ContStmt);
+  StmtDiff VisitSourceLocExpr(const clang::SourceLocExpr* E);
+
+  StmtDiff VisitSwitchStmt(const clang::SwitchStmt* SS);
+  StmtDiff VisitBreakStmt(const clang::BreakStmt* BS);
+  StmtDiff VisitCXXConstructExpr(const clang::CXXConstructExpr* CE);
+  StmtDiff VisitExprWithCleanups(const clang::ExprWithCleanups* EWC);
+  StmtDiff
+  VisitMaterializeTemporaryExpr(const clang::MaterializeTemporaryExpr* MTE);
+  StmtDiff
+  VisitCXXTemporaryObjectExpr(const clang::CXXTemporaryObjectExpr* TOE);
+  StmtDiff VisitCXXThisExpr(const clang::CXXThisExpr* CTE);
+  StmtDiff VisitCXXNewExpr(const clang::CXXNewExpr* CNE);
+  StmtDiff VisitCXXDeleteExpr(const clang::CXXDeleteExpr* CDE);
+  StmtDiff
+  VisitCXXScalarValueInitExpr(const clang::CXXScalarValueInitExpr* SVIE);
+  StmtDiff VisitCXXBindTemporaryExpr(const clang::CXXBindTemporaryExpr* BTE);
+  StmtDiff VisitCXXNullPtrLiteralExpr(const clang::CXXNullPtrLiteralExpr* NPL);
+  StmtDiff
+  VisitUnaryExprOrTypeTraitExpr(const clang::UnaryExprOrTypeTraitExpr* UE);
+  StmtDiff VisitPseudoObjectExpr(const clang::PseudoObjectExpr* POE);
+  StmtDiff VisitSubstNonTypeTemplateParmExpr(
+      const clang::SubstNonTypeTemplateParmExpr* NTTP);
+  StmtDiff VisitImplicitValueInitExpr(const clang::ImplicitValueInitExpr* IVIE);
+  StmtDiff VisitNullStmt(const clang::NullStmt* NS) { return StmtDiff{}; };
+  StmtDiff
+  VisitCXXStdInitializerListExpr(const clang::CXXStdInitializerListExpr* ILE);
+  StmtDiff VisitGNUNullExpr(const clang::GNUNullExpr* E);
+  StmtDiff VisitPredefinedExpr(const clang::PredefinedExpr* E);
+
+  StmtDiff VisitOMPExecutableDirective(const clang::OMPExecutableDirective* D);
+  StmtDiff VisitOMPParallelDirective(const clang::OMPParallelDirective* D);
+  StmtDiff
+  VisitOMPParallelForDirective(const clang::OMPParallelForDirective* D);
+  StmtDiff VisitOMPCriticalDirective(const clang::OMPCriticalDirective* D);
+  clang::OMPClause* VisitOMPPrivateClause(const clang::OMPPrivateClause* C);
+  clang::OMPClause*
+  VisitOMPFirstprivateClause(const clang::OMPFirstprivateClause* C);
+  clang::OMPClause*
+  VisitOMPLastprivateClause(const clang::OMPLastprivateClause* C);
+  clang::OMPClause* VisitOMPSharedClause(const clang::OMPSharedClause* C);
+  clang::OMPClause* VisitOMPReductionClause(const clang::OMPReductionClause* C);
+
+  static DeclDiff<clang::StaticAssertDecl>
+  DifferentiateStaticAssertDecl(const clang::StaticAssertDecl* SAD);
+
+  virtual std::string GetPushForwardFunctionSuffix();
+  virtual DiffMode GetPushForwardMode();
+
+protected:
+  /// Helper function for differentiating the switch statement body.
+  ///
+  /// It manages scopes and blocks for the switch case labels, checks if
+  /// compound statement to be differentiated is supported and returns the
+  /// active switch case label after processing the given `stmt` argument.
+  ///
+  /// Scope and and block for the last switch case label have to be managed
+  /// manually outside the function because this function have no way of
+  /// knowing when all the statements belonging to last switch case label have
+  /// been processed.
+  ///
+  /// \param[in] stmt Current statement to derive
+  /// \param[in] activeSC Current active switch case label
+  /// \return active switch case label after processing `stmt`
+  clang::SwitchCase* DeriveSwitchStmtBodyHelper(const clang::Stmt* stmt,
+                                                clang::SwitchCase* activeSC);
+
+  /// Tries to build custom derivative constructor pushforward call for the
+  /// given CXXConstructExpr.
+  ///
+  /// \return A call expression if a suitable custom derivative is found;
+  /// Otherwise returns nullptr.
+  clang::Expr* BuildCustomDerivativeConstructorPFCall(
+      const clang::CXXConstructExpr* CE,
+      llvm::SmallVectorImpl<clang::Expr*>& clonedArgs,
+      llvm::SmallVectorImpl<clang::Expr*>& derivedArgs);
+
+private:
+  /// Prepares the derivative function parameters.
+  void
+  SetupDerivativeParameters(llvm::SmallVectorImpl<clang::ParmVarDecl*>& params);
+
+  /// Generate a seed initializing each independent argument with 1 and 0
+  /// otherwise:
+  /// double f_darg0(double x, double y) {
+  ///   double _d_x = 1;
+  ///   double _d_y = 0;
+  void GenerateSeeds(const clang::FunctionDecl* dFD);
+};
+} // end namespace clad
+
+#endif // CLAD_FORWARD_MODE_VISITOR_H

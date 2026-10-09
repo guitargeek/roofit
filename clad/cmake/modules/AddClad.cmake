@@ -1,0 +1,306 @@
+if (CLAD_ENABLE_BENCHMARKS)
+  # Find the current branch.
+  execute_process(WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                  COMMAND git rev-parse HEAD
+                  OUTPUT_VARIABLE CURRENT_REPO_COMMIT
+                  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  string(REPLACE "/" "" CURRENT_REPO_COMMIT ${CURRENT_REPO_COMMIT})
+
+# Ask cmake to reconfigure each time we change the branch so that it can change
+# the value of CURRENT_REPO_COMMIT.
+set_property(DIRECTORY APPEND PROPERTY
+             CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/.git/HEAD")
+
+endif(CLAD_ENABLE_BENCHMARKS)
+
+#-------------------------------------------------------------------------------
+# function ENABLE_CLAD_FOR_TARGET(<executable>
+#   DEPENDS dependencies...
+#     A list of targets that the executable depends on.
+#   LIBRARIES libraries...
+#     A list of libraries to be linked in. Defaults to stdc++ pthread m.
+# )
+#-------------------------------------------------------------------------------
+function(ENABLE_CLAD_FOR_TARGET executable)
+  if (NOT TARGET ${executable})
+    message(FATAL_ERROR "'${executable}' is not a valid target.")
+  endif()
+
+  if (TARGET clad)
+    # Add the clad plugin
+    target_compile_options(${executable} PUBLIC -fplugin=$<TARGET_FILE:clad>)
+
+    # Debugging. Emitting the derivatives' source code.
+    #target_compile_options(${executable} PUBLIC "SHELL:-Xclang -plugin-arg-clad"
+    #  "SHELL: -Xclang -fdump-derived-fn")
+
+    # Debugging. Emit llvm IR.
+    #target_compile_options(${executable} PUBLIC -S -emit-llvm)
+
+    # Debugging. Optimization misses.
+    #target_compile_options(${executable} PUBLIC "SHELL:-Xclang -Rpass-missed=.*inline.*")
+
+    add_dependencies(${executable} clad)
+
+    # If clad.so changes we don't need to relink but to rebuild the source files.
+    # $<TARGET_FILE:clad> does not work for OBJECT_DEPENDS.
+    set (CLAD_SO_PATH "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/clad${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    set_source_files_properties(${source_files} PROPERTY OBJECT_DEPENDS ${CLAD_SO_PATH})
+  endif()
+
+  # Clad requires us to link against these libraries.
+  if (NOT EMSCRIPTEN)
+    target_link_libraries(${executable} PUBLIC stdc++ pthread m)
+  endif()
+
+  target_include_directories(${executable} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+  set_property(TARGET ${executable} PROPERTY RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+  if (NOT CLAD_BUILT_STANDALONE)
+    # We are probably building clad with clang. Make sure we've built clang.
+    add_dependencies(${executable} clang)
+  endif()
+
+  # Add dependencies to executable
+  if(ARG_DEPENDS)
+    add_dependencies(${executable} ${ARG_DEPENDS})
+  endif(ARG_DEPENDS)
+
+endfunction(ENABLE_CLAD_FOR_TARGET)
+
+#-------------------------------------------------------------------------------
+# function ADD_CLAD_LIBRARY(<library> sources...
+#   DEPENDS dependencies...
+#     A list of targets that the library depends on.
+#   LIBRARIES libraries...
+#     A list of libraries to be linked in. Defaults to stdc++ pthread m.
+# )
+#-------------------------------------------------------------------------------
+function(ADD_CLAD_LIBRARY library)
+  cmake_parse_arguments(ARG "" "DEPENDS;LIBRARIES" "" ${ARGN})
+
+  set(source_files ${ARG_UNPARSED_ARGUMENTS})
+
+  add_library (${library} ${source_files})
+  ENABLE_CLAD_FOR_TARGET(${library} ${ARGN})
+
+endfunction(ADD_CLAD_LIBRARY)
+
+
+#-------------------------------------------------------------------------------
+# function ADD_CLAD_EXECUTABLE(<executable> sources...
+#   DEPENDS dependencies...
+#     A list of targets that the executable depends on.
+#   LIBRARIES libraries...
+#     A list of libraries to be linked in. Defaults to stdc++ pthread m.
+# )
+#-------------------------------------------------------------------------------
+function(ADD_CLAD_EXECUTABLE executable)
+  cmake_parse_arguments(ARG "" "DEPENDS;LIBRARIES" "" ${ARGN})
+
+  set(source_files ${ARG_UNPARSED_ARGUMENTS})
+
+  add_executable(${executable} ${source_files})
+
+  ENABLE_CLAD_FOR_TARGET(${executable} ${ARGN})
+
+endfunction(ADD_CLAD_EXECUTABLE)
+
+#-------------------------------------------------------------------------------
+# function CB_ADD_GBENCHMARK(<benchmark> sources
+#   LABEL <short|long>
+#     A label that classifies how much time a benchmark is expected to take.
+#     Short benchmarks time out at 1200 seconds, long at 2400.
+#   DEPENDS dependencies...
+#     A list of targets that the executable depends on.
+#   LIBRARIES libraries...
+#     A list of libraries to be linked in. Defaults to stdc++ pthread m.
+# )
+#-------------------------------------------------------------------------------
+function(CB_ADD_GBENCHMARK benchmark)
+  cmake_parse_arguments(ARG "" "LABEL" "" ${ARGN})
+  ADD_CLAD_EXECUTABLE(${benchmark} ${ARG_UNPARSED_ARGUMENTS})
+
+  # Optimize the produced code.
+  target_compile_options(${benchmark} PUBLIC -O3)
+
+  # Turn off numerical diff fallback.
+  target_compile_definitions(${benchmark} PUBLIC CLAD_NO_NUM_DIFF)
+
+  target_link_libraries(${benchmark} PUBLIC ${ARG_LIBRARIES} gbenchmark)
+  if (NOT APPLE)
+    target_link_libraries(${benchmark} PUBLIC rt)
+  endif()
+
+  set (TIMEOUT_VALUE 1200)
+  set (LABEL "short")
+  if (ARG_LABEL AND "${ARG_LABEL}" STREQUAL "long")
+    set (TIMEOUT_VALUE 2400)
+    set (LABEL "long")
+  endif()
+
+  # Add benchmark as a CTest
+  add_test(NAME clad-${benchmark}
+    COMMAND ${benchmark} --benchmark_out_format=json
+    --benchmark_out=clad-gbenchmark-${benchmark}-${CURRENT_REPO_COMMIT}.json
+    --benchmark_color=false)
+  set_tests_properties(clad-${benchmark} PROPERTIES
+                       TIMEOUT "${TIMEOUT_VALUE}"
+                       LABELS "benchmark;${LABEL}"
+                       RUN_SERIAL TRUE
+                       DEPENDS ${benchmark})
+endfunction(CB_ADD_GBENCHMARK)
+
+set(CLAD_CUDA_GPU_ARCH "sm_61" CACHE STRING "Enter architecure explicitly. (By default it is: sm_61)")
+function(CB_ADD_CUDA_BENCHMARK TARGET_NAME)
+  ADD_CLAD_EXECUTABLE(${TARGET_NAME} ${ARGN})
+
+  target_compile_options(${TARGET_NAME} PRIVATE 
+      $<$<COMPILE_LANGUAGE:CXX>:
+          -x cuda
+          -std=c++17
+          -O3
+          -Xclang -new-struct-path-tbaa 
+          --cuda-gpu-arch=${CLAD_CUDA_GPU_ARCH} 
+      >
+  )
+
+  target_link_libraries(${TARGET_NAME} PRIVATE CUDA::cudart_static dl rt pthread m stdc++)
+
+  if(TARGET clad)
+    add_dependencies(${TARGET_NAME} clad)
+    target_compile_options(${TARGET_NAME} PRIVATE 
+        $<$<COMPILE_LANGUAGE:CXX>:-fplugin=$<TARGET_FILE:clad>>
+    )
+  endif()
+
+  add_test(NAME clad-${TARGET_NAME} COMMAND ${TARGET_NAME})
+  set_tests_properties(clad-${TARGET_NAME} PROPERTIES LABELS "benchmark")
+endfunction()
+
+
+
+#-------------------------------------------------------------------------------
+# function remove_coverage_flags(C_FLAGS_VAR CXX_FLAGS_VAR
+#                                SHARED_CREATE_CXX_FLAGS_VAR
+#                                EXE_LINKER_FLAGS_VAR
+#                                SHARED_LINKER_FLAGS_VAR)
+#   Removes GCC coverage-related compile and link flags from the specified
+#   CMake variables in the calling scope. Useful when building external projects
+#   that should not inherit coverage instrumentation from the main build.
+#
+#   Arguments:
+#     C_FLAGS_VAR                     - Name of the variable holding C compiler flags
+#     CXX_FLAGS_VAR                   - Name of the variable holding C++ compiler flags
+#     SHARED_CREATE_CXX_FLAGS_VAR     - Name of the variable holding shared library creation flags
+#     EXE_LINKER_FLAGS_VAR            - Name of the variable holding executable linker flags
+#     SHARED_LINKER_FLAGS_VAR         - Name of the variable holding shared library linker flags
+#-------------------------------------------------------------------------------|
+function(remove_coverage_flags C_FLAGS_VAR CXX_FLAGS_VAR SHARED_CREATE_CXX_FLAGS_VAR EXE_LINKER_FLAGS_VAR SHARED_LINKER_FLAGS_VAR)
+  string(REPLACE "${GCC_COVERAGE_COMPILE_FLAGS}" "" TMP "${${CXX_FLAGS_VAR}}")
+  set("${CXX_FLAGS_VAR}" "${TMP}" PARENT_SCOPE)
+
+  string(REPLACE "${GCC_COVERAGE_COMPILE_FLAGS}" "" TMP "${${C_FLAGS_VAR}}")
+  set("${C_FLAGS_VAR}" "${TMP}" PARENT_SCOPE)
+
+  string(REPLACE "${GCC_COVERAGE_COMPILE_FLAGS}" "" TMP "${${SHARED_CREATE_CXX_FLAGS_VAR}}")
+  set("${SHARED_CREATE_CXX_FLAGS_VAR}" "${TMP}" PARENT_SCOPE)
+
+  string(REPLACE "${GCC_COVERAGE_LINK_FLAGS}" "" TMP "${${EXE_LINKER_FLAGS_VAR}}")
+  set("${EXE_LINKER_FLAGS_VAR}" "${TMP}" PARENT_SCOPE)
+
+  string(REPLACE "${GCC_COVERAGE_LINK_FLAGS}" "" TMP "${${SHARED_LINKER_FLAGS_VAR}}")
+  set("${SHARED_LINKER_FLAGS_VAR}" "${TMP}" PARENT_SCOPE)
+endfunction()
+
+#-------------------------------------------------------------------------------
+# function disable_werror(C_FLAGS_VAR CXX_FLAGS_VAR)
+#   Disables the -Werror or /WX compiler flag for external projects.
+#   Useful to avoid build failures in external projects that may produce
+#   warnings treated as errors.
+#
+#   Arguments:
+#     C_FLAGS_VAR   - Name of the variable holding C compiler flags
+#     CXX_FLAGS_VAR - Name of the variable holding C++ compiler flags
+#-------------------------------------------------------------------------------
+function(disable_werror C_FLAGS_VAR CXX_FLAGS_VAR)
+  if(LLVM_ENABLE_WERROR)
+    if(MSVC)
+      set("${CXX_FLAGS_VAR}" "${${CXX_FLAGS_VAR}} /w" PARENT_SCOPE)
+      set("${C_FLAGS_VAR}" "${${C_FLAGS_VAR}} /w" PARENT_SCOPE)
+    elseif(LLVM_COMPILER_IS_GCC_COMPATIBLE)
+      set("${CXX_FLAGS_VAR}" "${${CXX_FLAGS_VAR}} -Wno-error" PARENT_SCOPE)
+      set("${C_FLAGS_VAR}" "${${C_FLAGS_VAR}} -Wno-error" PARENT_SCOPE)
+    endif()
+  endif()
+endfunction()
+
+include(ExternalProject)
+#-------------------------------------------------------------------------------
+# function clad_externalproject_add(NAME
+#                                   EXTRA_CMAKE_ARGS <args>)
+#   Wrapper around ExternalProject_Add that automatically removes coverage
+#   flags and disables -Werror for external projects.
+#
+#   Arguments:
+#     NAME                - Name of the external project target
+#     EXTRA_CMAKE_ARGS    - Additional CMake arguments to pass to the project
+#-------------------------------------------------------------------------------
+function(clad_externalproject_add NAME)
+  set(options)
+  set(oneValueArgs EXTRA_CMAKE_ARGS)
+  set(multiValueArgs)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  # Normalize EXTRA_CMAKE_ARGS to a proper list
+  if(ARG_EXTRA_CMAKE_ARGS)
+    separate_arguments(ARG_EXTRA_CMAKE_ARGS UNIX_COMMAND "${ARG_EXTRA_CMAKE_ARGS}")
+  endif()
+
+  # Toolchain flag sanitizing
+  set(C_FLAGS_EXT "${CMAKE_C_FLAGS}")
+  set(CXX_FLAGS_EXT "${CMAKE_CXX_FLAGS}")
+  set(SHARED_CREATE_CXX_FLAGS_EXT "${CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS}")
+  set(EXE_LINKER_FLAGS_EXT "${CMAKE_EXE_LINKER_FLAGS}")
+  set(SHARED_LINKER_FLAGS_EXT "${CMAKE_SHARED_LINKER_FLAGS}")
+
+  remove_coverage_flags(C_FLAGS_EXT CXX_FLAGS_EXT SHARED_CREATE_CXX_FLAGS_EXT EXE_LINKER_FLAGS_EXT SHARED_LINKER_FLAGS_EXT)
+  disable_werror(C_FLAGS_EXT CXX_FLAGS_EXT)
+
+
+  # Strip sanitizer flags: 3rd-party externals build with cmake
+  # defaults; the parent keeps its -fsanitize=* from LLVM_USE_SANITIZER.
+  foreach(_flags C_FLAGS_EXT CXX_FLAGS_EXT)
+    foreach(_san "-fsanitize=address" "-fsanitize=undefined" "-fsanitize=memory")
+      string(REPLACE "${_san}" "" ${_flags} "${${_flags}}")
+    endforeach()
+  endforeach()
+
+  # Everything EXCEPT EXTRA_CMAKE_ARGS gets forwarded unchanged
+  set(FORWARDED_ARGS ${ARG_UNPARSED_ARGUMENTS})
+
+  if (DEFINED CMAKE_TOOLCHAIN_FILE)
+    list(APPEND ARG_EXTRA_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
+  endif()
+
+  ExternalProject_Add(${NAME}
+    GIT_SHALLOW ON # Do not clone the history
+    EXCLUDE_FROM_ALL ON
+    LOG_DOWNLOAD ON
+    LOG_CONFIGURE ON
+    LOG_BUILD ON
+    LOG_INSTALL ON
+    LOG_OUTPUT_ON_FAILURE ON
+    TIMEOUT 600
+    ${FORWARDED_ARGS}
+    CMAKE_ARGS
+      -G "${CMAKE_GENERATOR}"
+      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DCMAKE_C_FLAGS=${C_FLAGS_EXT}
+      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DCMAKE_CXX_FLAGS=${CXX_FLAGS_EXT}
+      -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+      ${ARG_EXTRA_CMAKE_ARGS}
+  )
+endfunction()

@@ -107,6 +107,9 @@ public:
 
    void collectFunction(std::string const &name);
    std::string const &collectedCode() { return _collectedCode; }
+
+   void addSupportCode(std::string const &key, std::string const &code);
+   std::string const &supportCode() const { return _supportCode; }
    std::vector<std::string> const &collectedFunctions() { return _collectedFunctions; }
 
    auto const &dependsOnData() const { return _dependsOnData; }
@@ -198,6 +201,9 @@ private:
    std::vector<double> _xlArr;
    std::vector<std::string> _collectedFunctions;
    std::string _collectedCode;
+   /// @brief Code that the collected functions depend on, see addSupportCode().
+   std::string _supportCode;
+   std::unordered_set<std::string> _supportCodeKeys;
 };
 
 template <>

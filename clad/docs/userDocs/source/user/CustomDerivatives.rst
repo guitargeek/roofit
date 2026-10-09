@@ -1,0 +1,460 @@
+Custom derivatives
+*******************
+
+Clad allows users to provide derivatives for functions. This feature, known as custom derivatives,
+is useful in a variety of cases. This guide describes all that you need to know about custom
+derivatives: what they are, why you should care about them, and how to use the functionality
+to its fullest.
+
+Let's get started.
+
+What are custom derivatives?
+=============================
+
+Custom derivatives is a feature that lets users supply derivatives that
+Clad can use during differentiation. We use the term *custom derivatives*
+to refer to both this mechansim and to the user-provided derivatives themselves.
+
+Custom derivatives are useful when a more efficient or numerically stable
+expression for derivatives is known, or when Clad is unable to differentiate a function.
+Clad is unable to differentiate a function if its definition is in a library and thus
+source code is not available, or when the function code contains a C++ feature
+that Clad does not support yet.
+
+The custom derivative feature also enables hybrid AD approaches where Clad can work synergetically
+with tools based on operator overloading, for example. Another use of custom derivatives is to
+connect to third party libraries which need specific rules for differentiation such as
+linear solvers. The mechanism is useful to connect differentiable code to code which does not
+have differentiable properties, such as neural networks or other ML models.
+
+Custom derivatives are defined as C++ functions in clad-specific namespaces. Whenever Clad
+needs to differentiate a function, it will first look if a custom derivative for the function
+is available. If so, Clad will use the custom derivative instead of differentiating the function
+using AD.
+
+Custom derivatives are of three flavours: `pushforward`_, `pullback`_ and
+``reverse_forw``. Each flavour has a distinct use-case. The ``pushforward``
+custom derivatives are used by the Clad forward mode AD
+(``clad::differentiate``). The ``pullback`` custom derivatives are used by the
+Clad reverse mode AD (``clad::gradient``). ``reverse_forw`` is a weird custom derivative
+type because it is not meant to differentiate anything. It is used by the Clad reverse mode AD
+to determine the adjoint of a function's return value for functions which returns a reference or
+a pointer type. This case will be explained in more detail later.
+
+.. _pushforward: https://en.wikipedia.org/wiki/Pushforward_(differential)
+.. _pullback: https://en.wikipedia.org/wiki/Pullback_(differential_geometry)
+
+
+Clad internally automatically differentiates functions using these same flavours.
+If Clad needs to differentiate a function ``fn`` that has a custom derivative
+``fn_pushforward`` defined, then it will use ``fn_pushforward`` to compute
+the derivative of ``fn``. Otherwise, Clad will attempt to automatically generate
+``fn_pushforward``. The externally observable behavior of ``fn_pushforward``
+should be the same in both the cases. Put simply, ``fn_pushforward`` should correctly compute
+the derivative.
+
+Clad does not make any efforts to ensure that a custom derivative has the correct
+behavior. It is your responsibility to ensure that your custom derivatives are correct.
+
+
+Where to define custom derivatives?
+====================================
+
+The custom derivatives for free functions needs to be defined under
+``clad::custom_derivatives`` namespace and for class functions
+(both static and non-static) under ``clad::custom_derivatives::class_functions``
+namespace.
+
+If a free function is defined in a namespace ``A::B::C``,
+then the custom derivative for the function must be defined in the same namespace sequence
+under ``clad::custom_derivatives``, that is, ``clad::custom_derivatives::A::B::C``.
+The custom derivatives under ``clad::custom_derivatives::class_functions`` do not
+follow this rule. The custom derivatives for the class functions must all be defined
+directly in ``clad::custom_derivatives::class_functions`` regardless of the class's namespace.
+
+.. note::
+
+  Non-templated free functions defined in a header file need to be marked ``inline``
+  to avoid issues with symbol duplication just like any other C++ entity defined in a header file.
+
+Adjoint construction and initialization
+========================================
+
+Reverse-mode differentiation sometimes needs to construct an internal adjoint
+from an existing primal value. Clad provides two related customization points
+for this purpose:
+
+- ``clad::zero_init(x)`` resets values in an already constructed adjoint in
+  place. Use it when the adjoint's required structure and storage already
+  exist. The default implementation recursively clears ranges and uses
+  byte-wise zeroing for supported non-range types; provide an overload when
+  that behavior would not preserve the structure required by the type.
+- ``clad::zero_like(x)`` constructs and returns a new zero adjoint with the
+  same relevant runtime structure as the primal ``x``. Conceptually, it
+  returns a value structurally like ``x`` with ``zero_init`` applied.
+  This is the primary extension point for adjoint construction.
+
+The default ``zero_like`` implementation value-initializes arithmetic and
+enum types. For resizable ranges, it resizes an empty result to the primal size
+and recursively resizes nested ranges directly in their corresponding result
+elements. Other copyable ranges use copy-then-zero to preserve their structure.
+Provide a type-specific ``zero_like`` overload when neither strategy can
+create an independent, structurally correct adjoint. Common examples include
+owning or reference-counted storage, views that alias the primal, device memory,
+and types whose extents, allocator, device, or other runtime metadata require
+special handling.
+
+For example, a device buffer may require a fresh allocation on the same device
+instead of a shallow copy::
+
+  struct DeviceBuffer {
+    DeviceBuffer(std::size_t size, int device);
+    std::size_t size() const;
+    int device() const;
+    void fill(double value);
+  };
+
+  namespace clad {
+
+  inline void zero_init(DeviceBuffer& buffer) {
+    buffer.fill(0.0);
+  }
+
+  inline DeviceBuffer zero_like(const DeviceBuffer& value) {
+    DeviceBuffer result(value.size(), value.device());
+    zero_init(result);
+    return result;
+  }
+
+  } // namespace clad
+
+Here ``zero_init`` defines how to reset storage that already exists, while
+``zero_like`` defines how to allocate and construct that storage from the
+primal. The returned adjoint must not unintentionally alias mutable primal
+storage. Define these customizations after the differentiated type and before
+requesting its derivative.
+
+Pushforward custom derivatives
+===============================
+
+The :ref:`pushforward <PushforwardFunctions>` custom derivative is used by the Clad forward mode AD.
+Pushforward functions *push* the tangents of the inputs to the tangents of the outputs.
+Put simply, it computes partial derivative of function's output with respect to some independent
+variable. This independent variable does not necessarily have to be the function's input.
+This functionality can be easily understood with the help of an example, so let's set aside
+the mathematics jargon.
+
+Let's say we want to provide pushforward custom derivative for the function ``fn``:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/Pushforward.cpp
+   :language: cpp
+   :start-after: docs-begin-pushforward-fn
+   :end-before: docs-end-pushforward-fn
+
+Then the pushforward custom derivative for the function ``fn`` must compute the
+partial derivative of the function's output with respect to the independent variable using the
+values and the partial derivatives of the inputs. For example::
+
+  u = x;
+  v = 2 * x;
+  y = fn(u, v);
+
+If we are differentiating the above code with respect to ``x``, then the ``fn``
+pushforward should compute the partial derivative of the ``fn``'s output (that is, ``y``)
+with respect to ``x`` using the values of ``u`` and ``v`` and
+their partial derivatives with respect to ``x``.
+
+More formally, the function pushforward should compute the directional derivative of
+function output (``y``) at the point ``{u, v}`` in the direction of ``{du, dv}``.
+
+The story does not end here. The ``pushforward`` function is also required to compute the
+primal value, that is, the result of the call ``fn(u, v)``. This is essential for the
+forward mode AD to work correctly when a function take reference or pointer arguments.
+It is also beneficial for generating more efficient code.
+
+Now we are ready to see the ``pushforward`` custom derivative of ``fn``:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/Pushforward.cpp
+   :language: cpp
+   :start-after: docs-begin-pushforward-custom
+   :end-before: docs-end-pushforward-custom
+
+In the ``fn_pushforward`` function, ``du`` and ``dv`` carry the tangents
+:math:`\pdv{u}{x}` and :math:`\pdv{v}{x}`, where ``x`` is the independent variable
+with respect to which we are differentiating.
+
+Some important things to note here:
+
+- The ``pushforward`` custom derivative function name must be ``<function_name>_pushforward``.
+
+- The ``pushforward`` custom derivative function must take the same number of arguments as the
+  original function, followed by the partial derivatives of the inputs. The order of the arguments
+  must be the same as in the original function.
+
+- The ``pushforward`` custom derivative function must return a
+  ``clad::ValueAndPushforward`` object. This object contains both the primal value
+  and the output derivative.
+
+Pullback custom derivatives
+============================
+
+The :ref:`pullback <PullbackFunctions>` custom derivative is used by the Clad reverse mode AD.
+Pullback functions *pull* the adjoints of the outputs back to the adjoints of the inputs.
+Put simply, it computes the contributions to the partial derivatives of some output with respect
+to the function's inputs. This output variable does not necessarily have to be the function's output.
+Let's take the same example as before to understand the pullback custom
+derivative:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/Pullback.cpp
+   :language: cpp
+   :start-after: docs-begin-pullback-fn
+   :end-before: docs-end-pullback-fn
+
+The pullback custom derivative for the function ``fn`` must compute the contributions to the
+partial derivatives of some output variable with respect to the function's input variables using the
+output adjoints. For example::
+
+  r = fn(u, v);
+  y = r;
+  return y;
+
+If ``y`` is the final output of the code getting differentiated, then the
+``fn`` pullback should compute the contributions to the partial derivatives of
+``y`` with respect to ``u`` and ``v``. Please note that the output variable is
+``y``, which is not the function's output.
+
+Now we are ready to see the pullback custom derivative of ``fn``:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/Pullback.cpp
+   :language: cpp
+   :start-after: docs-begin-pullback-custom
+   :end-before: docs-end-pullback-custom
+
+``r`` is the ``fn``\ 's output and ``y`` is the final output
+of the code getting differentiated. ``dr`` carries the adjoint of ``r``, the
+partial derivative of the output variable with respect to the function's output,
+that is :math:`\pdv{y}{r}`. ``du`` and ``dv`` point at the adjoints of ``u`` and
+``v``; the pullback adds this call's contribution to each, so that
+:math:`\bar{u} \mathrel{+}= \pdv{r}{u} \bar{r}`.
+
+Some important things to note here:
+
+- The pullback custom derivative function name must be ``<function_name>_pullback``.
+
+- The pullback custom derivative function must take the same number of arguments as the
+  original function, followed by the partial derivative of the function's output, which is
+  then followed by the partial derivatives of the functions' arguments. The order of the
+  arguments must be the same as in the original function.
+
+Reverse-forward custom derivatives
+====================================
+
+This is an advanced section. Please feel free to skip it if it is your first read of this document.
+
+The reverse-forward custom derivative is used by the Clad reverse mode AD to determine
+the adjoint of a function's return value for functions which returns a reference or a
+pointer type. Adjoint of a variable ``u`` is the partial derivative of the output variable
+with respect to ``u``. Let's understand why reverse-forward functions are needed with
+the help of an example:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/ReverseForw.cpp
+   :language: cpp
+   :start-after: docs-begin-reverse-forw-primal
+   :end-before: docs-end-reverse-forw-primal
+
+In the above example, the ``g(u, v)`` output and ``double &r`` refers to the
+same variable, hence they should have the same adjoint. That is, if ``g(u, v)`` returns
+``u``, then ``r`` is an alias for ``u`` and ``dr`` must be an alias
+for ``du``. However, there is no purely static analysis mechanism possible for Clad to
+determine the return value of a function call because a function call result depends on the
+runtime values. So the question becomes how to correctly set the adjoint ``dr`` to either
+``du`` or ``dv`` in the derived function?
+
+Reverse-forward function is used to solve this problem. The reverse-forward function modifies
+the function that returns the reference, ``g`` in our case, to return both the primal
+value and the adjoint.
+With both the primal value and the adjoint being returned, Clad can correctly set both the ``r``
+and ``dr``. Note that this method can work because the reverse-forward function computes the
+adjoint variable at runtime instead of the compile-time.
+
+Now we are ready to see the reverse-forward custom derivative of ``g``:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/ReverseForw.cpp
+   :language: cpp
+   :start-after: docs-begin-reverse-forw-custom
+   :end-before: docs-end-reverse-forw-custom
+
+Here ``du`` and ``dv`` are the adjoints of the function arguments.
+
+Some important things to note here:
+
+- The reverse-forward custom derivative function name must be ``<function_name>_reverse_forw``.
+
+- The reverse-forward custom derivative function must take the same number of arguments as the
+  original function, followed by the adjoints of the function's arguments. The adjoint of a
+  function argument has the same type as the function argument after removing the ``const``
+  qualifier.  The order of the arguments must be the same as in the original function.
+
+- The reverse-forward custom derivative function must return a ``clad::ValueAndAdjoint``
+  object. This object contains both the primal value and the adjoint.
+
+Member functions custom derivatives
+=====================================
+
+Differentiating member functions is similar to differentiating free functions.
+The only differences are:
+
+- The member functions custom derivatives must be defined
+  in ``clad::custom_derivatives::class_functions`` namespace instead
+  of ``clad::custom_derivatives<::namespace::sequence::of::free::function>``.
+
+- The ``this`` pointer must be accounted for in the custom derivative.
+
+An example will make things clear:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/MemberFunctions.cpp
+   :language: cpp
+   :start-after: docs-begin-member-functions
+   :end-before: docs-end-member-functions
+
+.. note::
+
+   If ``fn`` is a ``const`` member function, then the primal
+   object is taken as a ``const`` parameter. For example, the signature
+   of pushforward and pullback will be as follows for ``fn(...) const``::
+
+    // pushforward custom derivative
+    clad::ValueAndPushforward<double, double>
+    fn_pushforward(const A *a, double u, double v, A *da, double du, double dv);
+
+    // pullback custom derivative
+    void fn_pullback(const A *a, double u, double v, double dr, A *da, double *du, double *dv)
+
+  Please note that the derivative object stays non-``const``.
+
+Constructor custom derivatives
+=================================
+
+Constructor custom derivatives are essential when we want to differentiate codes
+involving class objects. Constructors are simlar to member functions, except that
+they can initialize members. Initialization and assignment are very different things in C++.
+Some types such as ``const``, reference types, ..., must be initialized. The
+initialization aspect make the constructor differentiation a little more complex than
+the good old member functions.
+
+Constructor pushforward custom derivative
+------------------------------------------
+
+Constructor pushforward functions differ from ordinary pushforward
+functions in two important ways:
+
+- Constructor pushforward functions initialize the primal class object
+  and the corresponding derivative object. Ordinary member function
+  pushforwards takes an already-existing primal class object and the
+  corresponding derivative object as inputs.
+
+- Constructor pushforward functions return a value even though
+  constructor do not return anything. Constructor pushforward functions
+  return initialized primal object and the derivative object. These are
+  then used to initialize primal object and the derivative in the
+  derivative function code. Note that this requires that the class
+  type must be move-constructible.
+
+Now let's see constructor pushforward custom derivative in-action:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/Constructors.cpp
+   :language: cpp
+   :start-after: docs-begin-constructor-pushforward
+   :end-before: docs-end-constructor-pushforward
+
+``clad::ConstructorPushforwardTag<::Coordinates>`` is used to identify the
+class for which the constructor pushforward is defined. The member function
+custom derivatives do not require this tag because the custom derivative function
+takes the class object as the first argument, which is sufficient to identify
+the class.
+
+Constructor pullback custom derivative
+----------------------------------------
+
+Constructor pullback custom derivatives are more similar to the ordinary pullback
+functions. Constructor pullback functions do not have the same problem as of constructor
+pushforward functions of initializing the primal object and the derivative object. After all,
+by the time the constructor pullback is called, both the primal object and the adjoint object
+are already initialized. The initialization must be done in the forward-pass of the
+reverse-mode AD, and thus the responsibility of this lies on ``constructor_reverse_forw``.
+
+One important difference between a construct pullback  and an ordinary member function
+pullback is that the member function pullback takes the associated class object as an argument,
+whereas the constructor pullback does not. This is because the constructor pullback
+does not have a need for the class object to compute the pullback. Think of it another way,
+when the constructor is called, at that time the class object does not exist. Hence there is no
+need of the class object to compute the derivative.
+
+Let's see the constructor pullback custom derivative in-action using the
+same ``Coordinates`` class:
+
+.. literalinclude:: ../../../../test/Documentation/CustomDerivatives/Constructors.cpp
+   :language: cpp
+   :start-after: docs-begin-constructor-pullback
+   :end-before: docs-end-constructor-pullback
+
+Note that the constructor pullback does not need anything such as
+``clad::ConstructorPushforwardTag<::Coordinates>``. It is because
+the constructor pullback takes ``d_coordinates`` as an argument, which can be
+used to identify the class for which the constructor pullback is defined.
+
+Porting hints: discovering which custom derivatives to write
+============================================================
+
+When you bring Clad to a new library, the hard part is usually finding *which*
+functions need a custom derivative (or a non-differentiable marker) and what
+signature each one must have. If Clad has no custom derivative for a function
+and can see its definition, it silently falls back to **differentiating that
+definition** -- recursively descending into the library's internals (reference
+counting, allocation, I/O, ...), which for a library boundary is rarely what
+you want and often produces ill-formed or incorrect derivatives.
+
+The ``-fclad-porting-hints`` plugin flag surfaces every such boundary. Pass
+it through the compiler driver:
+
+.. code-block:: bash
+
+  clang -fplugin=/path/to/clad.so \
+        -Xclang -plugin-arg-clad -Xclang -fclad-porting-hints \
+        -I/path/to/clad/include yourcode.cpp
+
+For every function that is defined **outside the main source file** (i.e. in an
+included header -- the library boundary) and that Clad differentiates by cloning
+its definition, Clad emits a remark naming the exact custom-derivative signature
+to provide *and* the marker to declare instead:
+
+.. code-block:: text
+
+  remark: clad has no custom derivative for 'scale' and is differentiating its
+          definition, descending into library internals
+    note: to differentiate it, provide clad::custom_derivatives::scale_pullback
+          with signature 'void (const Widget *, double, double, Widget *, double *)'
+    note: or mark it non-differentiable with CLAD_NONDIFFERENTIABLE_TYPE(Widget)
+
+Each remark gives you the ways to resolve the boundary:
+
+- **Differentiate it semantically.** Copy the printed signature and implement
+  the custom derivative (a pushforward, pullback, or reverse-forward -- see the
+  sections above). This is the right choice when the function has a meaningful
+  derivative that is simpler or more correct than Clad cloning its
+  implementation (a matrix product's adjoint, a container's element access, ...).
+- **Mark it non-differentiable.** If the type carries no differentiable data
+  (a stream, an allocator, a reference-count handle, ...), mark it with
+  ``CLAD_NONDIFFERENTIABLE_TYPE(T)`` (see :doc:`UsingClad`) and Clad will
+  treat every construction of and call on it as opaque. The marker note is
+  emitted for member functions and constructors, where the enclosing type is
+  the thing to mark.
+- **Elide its reverse-forward pass.** For a reverse-forward-pass boundary whose
+  pass is a no-op (e.g. a shallow copy that shares its adjoint), declare the
+  printed ``..._reverse_forw`` and mark it ``elidable_reverse_forw``;
+  Clad then skips the call instead of cloning a body.
+
+Only functions outside the main file are reported, so differentiating your own
+code stays quiet; the remarks focus on the library edge you are porting. The
+flag is a diagnostic aid only -- it changes no generated code. It is also listed
+in ``-plugin-arg-clad -help``.

@@ -1,0 +1,87 @@
+## Overview <!-- omit in toc -->
+
+Thank you for investing your time in contributing to our project! There are
+numbers of ways to contribute to the project and we appreciate all of them. If
+you like the project please give Clad a star.
+
+Any contribution to open source makes a difference!
+
+## Are you new to open source, git or GitHub?
+
+To get an overview of the project, read the [README](README.md). Here are some
+resources to help you get started with open source contributions:
+
+- [Finding ways to contribute to open source on GitHub](https://docs.github.com/en/get-started/exploring-projects-on-github/finding-ways-to-contribute-to-open-source-on-github)
+- [Set up Git](https://docs.github.com/en/get-started/quickstart/set-up-git)
+- [GitHub flow](https://docs.github.com/en/get-started/quickstart/github-flow)
+- [Collaborating with pull requests](https://docs.github.com/en/github/collaborating-with-pull-requests)
+
+## Are you a contributor looking for a challenging summer project?
+
+Various opportunities such as information about google summer of code is
+generally published on [Clad's Wiki page](https://github.com/vgvassilev/clad/wiki).
+If you have used Clad and you have particular project proposal please reach out.
+
+## Ways to contribute
+
+### Submit a bug report
+
+If something does not seem right [search if an issue already exists](https://docs.github.com/en/github/searching-for-information-on-github/searching-on-github/searching-issues-and-pull-requests#search-by-the-title-body-or-comments) in [Clads issue tracker](https://github.com/vgvassilev/clad/issues). If a related issue doesn't exist, you can open a new issue using a relevant [issue form](https://github.com/vgvassilev/clad/issues/new/choose).
+
+### Good first issues
+
+Some issues have been marked as ["good first issues"](https://github.com/vgvassilev/clad/labels/good%20first%20issue).
+These are intended to be a good place to start contributing.
+
+### Read the documentation
+Documentation is critical for any open source project, especially for complex
+projects such as Clad. We have our documentation in the repository which is then
+rendered in the [clad.readthedocs](https://clad.readthedocs.io) website. In cases
+of AI-driven development it is highly recommended the human to read parts
+of the documentation and open issues for the parts that are not clear.
+
+## Creating a successful pull request
+
+To propose a code modification we use the pull requests. Pull requests which
+review quickly and successfully share several common traits:
+
+- Sharp -- intends to fix a concrete problem. Usually the pull request addresses
+  has an already opened issue;
+- Atomic -- has one or more commits that can be reverted without any unwanted
+  side effects or regressions, aside from what you’d expect based on its
+  message. [More on atomic commits in git](https://www.aleksandrhovhannisyan.com/blog/atomic-git-commits/).
+- Descriptive -- has a good description in what is being solved. This
+  information is usually published as part of the pull request description and
+  as part of the commit message. Writing good commit messages are critical. More
+  [here](https://github.blog/2022-06-30-write-better-commits-build-better-projects/)
+  and [here](https://cbea.ms/git-commit/). If your pull request fixes an existing
+  issue from the bug tracker make sure that the commit log and the pull request
+  description mentions `Fixes: #<ISSUE_NUMBER>`. That will link both and will
+  close the issue automatically upon merging.
+- Tested -- has a set of tests making sure that the issue will not resurface
+  without a notice. Usually the codecov bots annotate the code paths that are
+  not tested in the pull request after being run.
+- Documented -- has good amount of code comment. The test cases are also a good
+  source of documentation. [Here](https://stackoverflow.blog/2021/12/23/best-practices-for-writing-code-comments/)
+  is a guideline about how write good code comments. [Here](https://stackoverflow.com/questions/184618/what-is-the-best-comment-in-source-code-you-have-ever-encountered)
+  are examples of what *not* to write as a code comment.
+
+### Developer Documentation
+
+We have documented several useful hints that usually help when addressing issues
+as they come during developement time in our [developer documentation](https://clad.readthedocs.io/en/latest/user/DevelopersDocumentation.html). 
+
+In case you are interested in seeing the big picture and are just getting 
+started with Clang, there is a document that might interest you: [Introduction to Clang for Clad contributors](https://clad.readthedocs.io/en/latest/user/IntroductionToClangForCladContributors.html). 
+It covers most of the basic concepts in Clang that Clad uses and describes the operation
+of the latter with examples for newcomers specifically.
+
+## What not to do
+
+Clad has a community of developers and users through open source and their time
+is a valuable asset. The reviewers time is precious and we encourage new 
+contributors to spend it wisely. Here is a list of things not to do:
+
+- Run an AI system against the repository and start opening random pull requests
+- Open issues without sufficient details or reproducers
+- Try to fix 10 different issues at the same time with multiple pull requests (usually generated by AI)

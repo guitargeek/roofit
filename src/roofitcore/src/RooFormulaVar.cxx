@@ -332,6 +332,13 @@ std::string RooFormulaVar::getUniqueFuncName() const
    return evaluator().getTFormula()->GetUniqueFuncName().Data();
 }
 
+/// The code of the function named by getUniqueFuncName(), for compiling the
+/// generated code outside of the interpreter.
+std::string RooFormulaVar::getUniqueFuncCode() const
+{
+   return RooFormulaUtils::clingFunctionCode(*evaluator().getTFormula());
+}
+
 std::unique_ptr<RooAbsArg>
 RooFormulaVar::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileContext &ctx) const
 {

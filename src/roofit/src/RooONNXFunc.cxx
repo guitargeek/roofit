@@ -288,8 +288,18 @@ std::string _RooONNXFunc_onnxToCppWithSofie(std::uint8_t const *onnxBytes, std::
    std::string namespaceName = "TMVA_SOFIE_" + _funcName + "";
    counter++;
 
+   // Everything declared to the interpreter below is also collected for the
+   // builtin clad, which compiles the code of the functions that use this
+   // object separately, see codegenSupportCode().
+   _codegenSupportCode.clear();
+   auto declare = [this](std::string const &code) {
+      gInterpreter->Declare(code.c_str());
+      _codegenSupportCode += code;
+      _codegenSupportCode += "\n";
+   };
+
    std::string modelCode = onnxToCppWithSofie(_onnxBytes.data(), _onnxBytes.size(), _funcName.c_str());
-   gInterpreter->Declare(modelCode.c_str());
+   declare(modelCode);
 
    auto nInputTensors = static_cast<unsigned long>(
       gInterpreter->ProcessLine(("std::size(" + namespaceName + "::inputTensorDims);").c_str()));
@@ -326,7 +336,7 @@ std::string _RooONNXFunc_onnxToCppWithSofie(std::uint8_t const *onnxBytes, std::
          << "   return roo_inner_wrapper(session, " << innerArgs << ");\n"
          << "}\n\n"
          << "} // namespace " << namespaceName << "\n";
-      gInterpreter->Declare(ss.str().c_str());
+      declare(ss.str());
    }
 
    // Evaluation thunk with a uniform signature regardless of the input-tensor count:
@@ -344,7 +354,7 @@ std::string _RooONNXFunc_onnxToCppWithSofie(std::uint8_t const *onnxBytes, std::
       ss << ", out);\n"
          << "}\n"
          << "} // namespace " << namespaceName << "\n";
-      gInterpreter->Declare(ss.str().c_str());
+      declare(ss.str());
    }
 
    std::string sessionName = "::TMVA_SOFIE_" + _funcName + "::Session";
@@ -362,6 +372,15 @@ std::string _RooONNXFunc_onnxToCppWithSofie(std::uint8_t const *onnxBytes, std::
    gInterpreter->Declare("#include <Math/CladDerivator.h>");
 
    gInterpreter->ProcessLine(("clad::gradient(" + namespaceName + "::roo_wrapper, \"" + cladInputs + "\");").c_str());
+
+   // The same request for the builtin clad, as a function so that it can be
+   // part of a translation unit.
+   _codegenSupportCode += "#pragma clad ON\n"
+                          "void " +
+                          namespaceName + "_clad_request() {\n  clad::gradient(" + namespaceName + "::roo_wrapper, \"" +
+                          cladInputs +
+                          "\");\n}\n"
+                          "#pragma clad OFF\n\n";
 
    // The codegen call site (CodegenImpl::codegenImpl(RooONNXFunc)) passes one
    // double-array argument per input tensor. Emit roo_outer_wrapper and the matching
@@ -419,7 +438,7 @@ std::string _RooONNXFunc_onnxToCppWithSofie(std::uint8_t const *onnxBytes, std::
       ss << "}\n\n"
          << "} // namespace " << namespaceName << "\n"
          << "} // namespace clad::custom_derivatives\n";
-      gInterpreter->Declare(ss.str().c_str());
+      declare(ss.str());
    }
 }
 

@@ -1,0 +1,1074 @@
+//--------------------------------------------------------------------*- C++ -*-
+// clad - the C++ Clang-based Automatic Differentiator
+// version: $Id$
+// author:  Vassil Vassilev <vvasilev-at-cern.ch>
+//------------------------------------------------------------------------------
+
+#ifndef CLAD_DIFFERENTIATOR
+#define CLAD_DIFFERENTIATOR
+
+#include "Array.h"
+#include "ArrayRef.h"
+#include "BuiltinDerivatives.h"
+#ifdef __CUDACC__
+#include "BuiltinDerivativesCUDA.cuh"
+#endif
+#include "CladConfig.h"
+// Declares the Enzyme activity markers and gradient carrier that clad
+// refers to from the code it generates, so every user of the Enzyme
+// backend has them in scope. Not used by this header itself.
+// NOLINTNEXTLINE(misc-include-cleaner)
+#include "EnzymeBuiltins.h"
+#include "FunctionTraits.h"
+#include "Matrix.h"
+#include "NumericalDiff.h"
+#include "RestoreTracker.h"
+#include "Tape.h"
+
+#include <array>
+#include <cassert>
+#include <cstddef>
+#include <cstring>
+#include <initializer_list>
+#include <iterator>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+#include <type_traits>
+#include <utility>
+// Keep std::valarray's non-member begin/end overloads visible when is_range is
+// defined below.
+#include <valarray> // NOLINT(misc-include-cleaner)
+#ifndef __CUDACC__
+#include <mutex>
+#endif
+
+namespace clad {
+
+/// \returns the size of a c-style string
+inline CUDA_HOST_DEVICE unsigned int GetLength(const char* code) {
+  const char* code_copy = code;
+#ifdef __CUDACC__
+  unsigned int count = 0;
+  while (*code_copy != '\0') {
+    count++;
+    code_copy++;
+  }
+#else
+  unsigned int count = strlen(code_copy);
+#endif
+  return count;
+}
+
+#ifdef __CUDACC__
+#define CUDA_ARGS bool CUDAkernel, dim3 grid, dim3 block,
+#define CUDA_REST_ARGS size_t shared_mem, cudaStream_t stream,
+#else
+#define CUDA_ARGS
+#define CUDA_REST_ARGS
+#endif
+
+/// Tape type used for storing values in reverse-mode AD inside loops.
+template <typename T, std::size_t SBO_SIZE = 64, std::size_t SLAB_SIZE = 1024,
+          bool is_multithread = false, bool DiskOffload = false,
+          bool GpuOffload = false>
+using tape =
+    tape_impl<T, SBO_SIZE, SLAB_SIZE, is_multithread, DiskOffload, GpuOffload>;
+
+/// The attributes on clad::forward_sweep. A derivative whose primal returns
+/// before its tail runs its forward sweep as a closure handed to
+/// forward_sweep, and the derivative's locals are that closure's captures:
+/// forced inline they are plain locals again, out of line every one of them
+/// lives in memory behind a reference and the sweep is a call. Define the
+/// macro before including clad to try another spelling, or to switch the
+/// forcing off.
+#ifndef CLAD_FORWARD_SWEEP_ATTRS
+#define CLAD_FORWARD_SWEEP_ATTRS __attribute__((always_inline, flatten))
+#endif
+
+/// Runs the forward sweep \p f of a derivative whose primal returns before
+/// its tail. Each early return of the primal is a return from \p f, and the
+/// reverse sweep follows the call, so it runs on every path.
+template <class F>
+CLAD_FORWARD_SWEEP_ATTRS CUDA_HOST_DEVICE CLAD_CONSTEXPR_CXX14 void
+forward_sweep(F&& f) {
+  f();
+}
+
+/// Add value to the end of the tape, return the same value.
+template <typename T, std::size_t SBO_SIZE = 64, std::size_t SLAB_SIZE = 1024,
+          bool DiskOffload = false, bool GpuOffload, typename... ArgsT>
+CUDA_HOST_DEVICE T& push(tape<T, SBO_SIZE, SLAB_SIZE, /*is_multithread=*/false,
+                              DiskOffload, GpuOffload>& to,
+                         ArgsT... val) {
+  to.emplace_back(std::forward<ArgsT>(val)...);
+  return to.back();
+}
+
+/// A specialization for C arrays
+template <typename T, typename U, size_t N, std::size_t SBO_SIZE = 64,
+          std::size_t SLAB_SIZE = 1024, bool DiskOffload = false,
+          bool GpuOffload = false>
+CUDA_HOST_DEVICE void
+push(tape<T[N], SBO_SIZE, SLAB_SIZE, /*is_multithread=*/false, DiskOffload,
+          GpuOffload>& to,
+     const U& val) {
+  to.emplace_back();
+  std::copy(std::begin(val), std::end(val), std::begin(to.back()));
+}
+
+  /// Remove the last value from the tape, return it.
+template <typename T, std::size_t SBO_SIZE = 64, std::size_t SLAB_SIZE = 1024,
+          bool DiskOffload = false, bool GpuOffload = false>
+CUDA_HOST_DEVICE T pop(tape<T, SBO_SIZE, SLAB_SIZE, /*is_multithread=*/false,
+                            DiskOffload, GpuOffload>& to) {
+  T val = std::move(to.back());
+  to.pop_back();
+  return val;
+}
+
+  /// A specialization for C arrays
+template <typename T, std::size_t N, std::size_t SBO_SIZE = 64,
+          std::size_t SLAB_SIZE = 1024, bool DiskOffload = false,
+          bool GpuOffload = false>
+CUDA_HOST_DEVICE void
+pop(tape<T[N], SBO_SIZE, SLAB_SIZE,
+         /*is_multithread=*/false, DiskOffload, GpuOffload>& to) {
+  to.pop_back();
+}
+
+  /// Access return the last value in the tape.
+template <typename T, std::size_t SBO_SIZE = 64, std::size_t SLAB_SIZE = 1024,
+          bool DiskOffload = false, bool GpuOffload = false>
+CUDA_HOST_DEVICE T&
+back(tape<T, SBO_SIZE, SLAB_SIZE,
+          /*is_multithread=*/false, DiskOffload, GpuOffload>& of) {
+  return of.back();
+}
+
+  /// Thread safe tape access functions with mutex locking mechanism
+/// Thread safe tape access functions with mutex locking mechanism
+#ifndef __CUDACC__
+/// Add value to the end of the tape, return the same value.
+template <typename T, std::size_t SBO_SIZE = 64, std::size_t SLAB_SIZE = 1024,
+          bool DiskOffload = false, bool GpuOffload = false, typename... ArgsT>
+T push(tape<T, SBO_SIZE, SLAB_SIZE, /*is_multithreaded=*/true, DiskOffload,
+            GpuOffload>& to,
+       ArgsT&&... val) {
+  std::lock_guard<std::mutex> lock(to.mutex());
+  to.emplace_back(std::forward<ArgsT>(val)...);
+  return to.back();
+}
+
+  /// A specialization for C arrays
+template <typename T, typename U, size_t N, std::size_t SBO_SIZE = 64,
+          std::size_t SLAB_SIZE = 1024, bool DiskOffload = false,
+          bool GpuOffload = false>
+void push(tape<T[N], SBO_SIZE, SLAB_SIZE, /*is_multithreaded=*/true,
+               DiskOffload, GpuOffload>& to,
+          const U& val) {
+  std::lock_guard<std::mutex> lock(to.mutex());
+  to.emplace_back();
+  std::copy(std::begin(val), std::end(val), std::begin(to.back()));
+}
+
+  /// Remove the last value from the tape, return it.
+template <typename T, std::size_t SBO_SIZE = 64, std::size_t SLAB_SIZE = 1024,
+          bool DiskOffload = false, bool GpuOffload = false>
+T pop(tape<T, SBO_SIZE, SLAB_SIZE, /*is_multithreaded=*/true, DiskOffload,
+           GpuOffload>& to) {
+  std::lock_guard<std::mutex> lock(to.mutex());
+  T val = std::move(to.back());
+  to.pop_back();
+  return val;
+}
+
+  /// A specialization for C arrays
+template <typename T, std::size_t N, std::size_t SBO_SIZE = 64,
+          std::size_t SLAB_SIZE = 1024, bool DiskOffload = false,
+          bool GpuOffload = false>
+void pop(tape<T[N], SBO_SIZE, SLAB_SIZE, /*is_multithreaded=*/true, DiskOffload,
+              GpuOffload>& to) {
+  std::lock_guard<std::mutex> lock(to.mutex());
+  to.pop_back();
+}
+
+  /// Access return the last value in the tape.
+template <typename T, std::size_t SBO_SIZE = 64, std::size_t SLAB_SIZE = 1024,
+          bool DiskOffload = false>
+T& back(
+    tape<T, SBO_SIZE, SLAB_SIZE, /*is_multithreaded=*/true, DiskOffload>& of) {
+  std::lock_guard<std::mutex> lock(of.mutex());
+  return of.back();
+}
+#endif
+/// Generic fallback overloads for user-defined custom tape types.
+template <typename T> struct is_clad_tape : std::false_type {};
+
+template <typename T, std::size_t SBO, std::size_t SLAB, bool MT, bool Disk,
+          bool Gpu>
+struct is_clad_tape<tape_impl<T, SBO, SLAB, MT, Disk, Gpu>> : std::true_type {};
+
+template <typename TapeType, typename... ArgsT,
+          typename std::enable_if<!clad::is_clad_tape<TapeType>::value,
+                                  int>::type = 0>
+CUDA_HOST_DEVICE auto push(TapeType& to, ArgsT&&... val)
+    -> decltype(to.emplace_back(std::forward<ArgsT>(val)...), to.back()) {
+  to.emplace_back(std::forward<ArgsT>(val)...);
+  return to.back();
+}
+
+template <typename TapeType,
+          typename std::enable_if<!clad::is_clad_tape<TapeType>::value,
+                                  int>::type = 0>
+CUDA_HOST_DEVICE auto pop(TapeType& to) ->
+    typename std::decay<decltype(to.back())>::type {
+  typename std::decay<decltype(to.back())>::type val = std::move(to.back());
+  to.pop_back();
+  return val;
+}
+
+template <typename TapeType,
+          typename std::enable_if<!clad::is_clad_tape<TapeType>::value,
+                                  int>::type = 0>
+CUDA_HOST_DEVICE auto back(TapeType& of) -> decltype(of.back()) {
+  return of.back();
+}
+
+/// Record `n` elements starting at `p`, so the reverse sweep can put them back
+/// with peek_range. Used where clad can prove how much of a buffer a call
+/// overwrites: recording the range once is cheaper than snapshotting each
+/// element into a restore_tracker, and the pair needs no addresses.
+// A run of a raw buffer is the thing these three exist to walk.
+// NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+template <typename TapeType, typename T>
+CUDA_HOST_DEVICE void record_range(TapeType& to, const T* p, std::size_t n) {
+  for (std::size_t i = 0; i < n; ++i)
+    to.emplace_back(p[i]);
+}
+
+/// Write the most recently recorded run back to `p` without consuming it. A
+/// call's reverse sweep replays it twice -- once so the pullback starts from
+/// pre-call state, and once after, because the pullback's own replay mutates
+/// what the first replay put back.
+template <typename TapeType, typename T>
+CUDA_HOST_DEVICE void peek_range(TapeType& from, T* p, std::size_t n) {
+  for (std::size_t i = 0; i < n; ++i)
+    p[n - 1 - i] = from.peek_back(i);
+}
+
+/// Drop the most recently recorded run, once its call has been swept. Keeps
+/// the tape's LIFO order in step with the sweep, which is what lets one tape
+/// serve every instance of a call inside a loop.
+template <typename TapeType>
+CUDA_HOST_DEVICE void drop_range(TapeType& from, std::size_t n) {
+  for (std::size_t i = 0; i < n; ++i)
+    from.pop_back();
+}
+// NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+
+/// Reset values in an already-constructed adjoint (or its iterable elements)
+/// to zero in place. This is the primitive used by the default zero_like
+/// implementation. Provide an overload when the default recursive or
+/// byte-wise zeroing would not preserve a type's required structure.
+namespace zero_init_detail {
+template <class T> struct iterator_traits : std::iterator_traits<T> {};
+template <> struct iterator_traits<void*> {};
+template <> struct iterator_traits<const void*> {};
+
+template <class T, class It>
+std::integral_constant<
+    bool, !std::is_same<typename std::remove_cv<T>::type,
+                        typename iterator_traits<It>::value_type>::value>
+is_range_check(It first, It last);
+
+template <class T>
+decltype(is_range_check<T>(std::begin(std::declval<const T&>()),
+                           std::end(std::declval<const T&>())))
+is_range(int);
+template <class T> std::false_type is_range(...);
+} // namespace zero_init_detail
+
+  template <class T>
+  struct is_range : decltype(zero_init_detail::is_range<T>(0)) {};
+
+  template <class T> CUDA_HOST_DEVICE void zero_init(T& t);
+
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+  template <class T,
+            typename std::enable_if<!is_range<T>::value, int>::type = 0>
+  CUDA_HOST_DEVICE void zero_impl(volatile T& t) {
+    // Bound once so the assertion and the guard below cannot drift apart: a
+    // type the assertion rejects must not go on to be memcpy'd anyway.
+    constexpr bool is_zeroable = std::is_trivially_destructible<T>::value;
+    static_assert(is_zeroable, "Clad device fallback zero_init requires "
+                               "trivially destructible types.");
+    if constexpr (is_zeroable) {
+      // Fill an array with zeros.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
+      unsigned char tmp[sizeof(T)] = {};
+
+#if __has_builtin(__builtin_memcpy)
+      __builtin_memcpy(const_cast<T*>(&t), tmp, sizeof(T));
+#elif defined(__CUDACC__)
+      // Fallback for the devices that don't have __builtin_memcpy.
+      // Transfers the zero with a loop. Unlike memcpyt, this does not create
+      // the object in the destination region of storage and language semantics
+      // can't be fully preserved
+      volatile unsigned char* byte_ptr =
+          reinterpret_cast<volatile unsigned char*>(const_cast<T*>(&t));
+      for (std::size_t i = 0; i < sizeof(T); ++i)
+        byte_ptr[i] = 0;
+#else
+      // Transfer the zeros with the magic function memcpy which can implicitly
+      // create objects in the destination region of storage immediately prior
+      // to copying the sequence of characters to the destination [27.5.1(3)].
+      // (C++ has deprecated the volatile qualifiers. However, we drop them here
+      // to make sure things still work with codebases which still have them)
+      std::memcpy(const_cast<T*>(&t), tmp, sizeof(T));
+#endif
+    }
+  }
+
+  template <class T, typename std::enable_if<is_range<T>::value, int>::type = 0>
+  CUDA_HOST_DEVICE void zero_impl(T& t) {
+    for (auto& x : t)
+      zero_init(x);
+  }
+
+  template <class T> CUDA_HOST_DEVICE void zero_init(T& t) { zero_impl(t); }
+
+  /// Construct a zero adjoint with the same relevant structure as \p value.
+  ///
+  /// Conceptually, zero_like(value) returns a value structurally like value
+  /// with zero_init applied. This is the adjoint-construction extension point;
+  /// provide an overload when copy-then-zero is incorrect, for example for
+  /// owning or reference-counted storage, device memory, or types whose shape,
+  /// allocator, or other runtime metadata needs special handling. The
+  /// reverse-mode visitor prefers this customization point when constructing
+  /// an internal adjoint from an existing primal value.
+  // Keep this header compatible with C++14; some Clad tests and clients include
+  // it in that language mode.
+  // NOLINTBEGIN(modernize-type-traits)
+  template <class T, std::enable_if_t<std::is_arithmetic<T>::value ||
+                                          std::is_enum<T>::value,
+                                      int> = 0>
+  CUDA_HOST_DEVICE T zero_like(const T&) {
+    return T();
+  }
+
+  namespace zero_like_detail {
+  template <class T>
+  auto has_resize_impl(int)
+      -> decltype(static_cast<void>(std::declval<const T&>().size()),
+                  static_cast<void>(T()),
+                  static_cast<void>(std::declval<T&>().resize(
+                      std::declval<typename T::size_type>())),
+                  std::true_type{});
+  template <class T> std::false_type has_resize_impl(...);
+
+  template <class T> struct has_resize : decltype(has_resize_impl<T>(0)) {};
+
+  // Implement these helpers after both range zero_like overloads so recursive
+  // fallback calls see the complete overload set.
+  template <class ResultRange, class PrimalRange>
+  void resize_and_zero(ResultRange& result, const PrimalRange& value);
+  template <class ResultElement, class PrimalElement>
+  void reconstruct_nested_range(ResultElement&& result,
+                                const PrimalElement& value, std::true_type);
+  template <class ResultElement, class PrimalElement>
+  void reconstruct_nested_range(ResultElement&& result,
+                                const PrimalElement& value, std::false_type);
+  template <class ResultRange, class PrimalRange>
+  void reconstruct_resizable_range(ResultRange&& result,
+                                   const PrimalRange& value, std::true_type);
+  template <class ResultRange, class PrimalRange>
+  void reconstruct_resizable_range(ResultRange&& result,
+                                   const PrimalRange& value, std::false_type);
+  } // namespace zero_like_detail
+
+  /// Default zero_like for a resizable range. Resize an empty result to the
+  /// primal size and recursively resize nested ranges directly in their result
+  /// positions, preserving rectangular and ragged shapes without copying
+  /// primal values or creating temporary nested containers.
+  template <class T,
+            std::enable_if_t<is_range<T>::value &&
+                                 std::is_copy_constructible<T>::value &&
+                                 zero_like_detail::has_resize<T>::value,
+                             int> = 0>
+  T zero_like(const T& value) {
+    T result;
+    zero_like_detail::resize_and_zero(result, value);
+    return result;
+  }
+
+  /// Fallback zero_like for copyable, non-resizable ranges: copy the primal
+  /// structure, then zero it.
+  template <class T,
+            std::enable_if_t<is_range<T>::value &&
+                                 std::is_copy_constructible<T>::value &&
+                                 !zero_like_detail::has_resize<T>::value,
+                             int> = 0>
+  T zero_like(const T& value) {
+    T result(value);
+    zero_init(result);
+    return result;
+  }
+
+  namespace zero_like_detail {
+  template <class ResultRange, class PrimalRange>
+  void resize_and_zero(ResultRange& result, const PrimalRange& value) {
+    result.resize(value.size());
+    auto resultIt = std::begin(result);
+    for (const auto& element : value) {
+      using Element = typename std::remove_cv<
+          typename std::remove_reference<decltype(element)>::type>::type;
+      reconstruct_nested_range(*resultIt, element, is_range<Element>{});
+      ++resultIt;
+    }
+  }
+
+  template <class ResultElement, class PrimalElement>
+  void reconstruct_nested_range(ResultElement&& result,
+                                const PrimalElement& value, std::true_type) {
+    reconstruct_resizable_range(
+        result, value,
+        has_resize<typename std::remove_cv<PrimalElement>::type>{});
+  }
+
+  template <class ResultElement, class PrimalElement>
+  void reconstruct_nested_range(ResultElement&& result, const PrimalElement&,
+                                std::false_type) {
+    zero_init(result);
+  }
+
+  template <class ResultRange, class PrimalRange>
+  void reconstruct_resizable_range(ResultRange&& result,
+                                   const PrimalRange& value, std::true_type) {
+    resize_and_zero(result, value);
+  }
+
+  template <class ResultRange, class PrimalRange>
+  void reconstruct_resizable_range(ResultRange&& result,
+                                   const PrimalRange& value, std::false_type) {
+    result = zero_like(value);
+  }
+  } // namespace zero_like_detail
+  // NOLINTEND(modernize-type-traits)
+
+  /// Initialize a const sized array.
+  // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
+  template <typename T> CUDA_HOST_DEVICE void zero_init(T* x, std::size_t N) {
+    for (std::size_t i = 0; i < N; ++i)
+      zero_init(x[i]);
+  }
+
+  // This function is similar to the iterator-based std::move but is designed to
+  // work with CUDA.
+  // NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
+  // An overload to initialize arrays from buffers, e.g., `clad::move(t0, arr)`
+  template <class T, size_t N>
+  CUDA_HOST_DEVICE void move(T* Input, T (&Output)[N]) {
+    for (size_t i = 0; i < N; ++i)
+      Output[i] = std::move(Input[i]);
+  }
+
+  // An overload to initialize arrays with init lists, e.g., `clad::move({1, 2},
+  // arr)`
+  template <class T, size_t N>
+  CUDA_HOST_DEVICE void move(std::initializer_list<T> Input, T (&Output)[N]) {
+    size_t i = 0;
+    for (auto it = Input.begin(); it != Input.end() && i < N; ++it, ++i)
+      Output[i] = *it;
+    for (; i < N; ++i)
+      Output[i] = T();
+  }
+  // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
+
+  /// Pad the args supplied with nullptr(s) or zeros to match the the num of
+  /// params of the function and then execute the function using the padded args
+  /// i.e. we are adding default arguments as we cannot do that with
+  /// meta programming
+  ///
+  /// For example:
+  /// Let's assume we have a function with the signature:
+  ///   fn_grad(double i, double j, int k, int l);
+  /// and f is a pointer to fn_grad
+  /// and args are the supplied arguments- 1.0, 2.0 and Args has their type
+  /// (double, double)
+  ///
+  /// When pad_and_execute(DropArgs_t<sizeof...(Args), decltype(f)>{}, f, args)
+  /// is run, the Rest variadic argument will have the types (int, int).
+  /// pad_and_execute will then make up for the remaining args by appending 0s
+  /// and the return statement translates to:
+  ///   return f(1.0, 2.0, 0, 0);
+  // for executing non-member functions
+  template <bool EnablePadding, class... Rest, class F, class... Args,
+            class... fArgTypes,
+            typename std::enable_if<EnablePadding, bool>::type = true>
+  CLAD_CONSTEXPR_CXX14 CUDA_HOST_DEVICE return_type_t<F>
+  execute_with_default_args(list<Rest...>, F f, list<fArgTypes...>,
+                            CUDA_ARGS CUDA_REST_ARGS Args&&... args) {
+#if defined(__CUDACC__) && !defined(__CUDA_ARCH__)
+    if (CUDAkernel) {
+      constexpr size_t totalArgs = sizeof...(args) + sizeof...(Rest);
+      std::array<void*, totalArgs> argPtrs = {(void*)(&args)...,
+                                              static_cast<Rest>(nullptr)...};
+
+      void* null_param = nullptr;
+      for (size_t i = sizeof...(args); i < totalArgs; ++i)
+        argPtrs[i] = &null_param;
+
+      cudaLaunchKernel((void*)f, grid, block, argPtrs.data(), shared_mem,
+                       stream);
+      return return_type_t<F>();
+    } else {
+      return f(static_cast<Args>(args)..., static_cast<Rest>(nullptr)...);
+    }
+#else
+    return f(static_cast<Args>(args)..., static_cast<Rest>(nullptr)...);
+#endif
+  }
+
+  template <bool EnablePadding, class... Rest, class F, class... Args,
+            class... fArgTypes,
+            typename std::enable_if<!EnablePadding, bool>::type = true>
+  CLAD_CONSTEXPR_CXX14 return_type_t<F>
+  execute_with_default_args(list<Rest...>, F f, list<fArgTypes...>,
+                            CUDA_ARGS CUDA_REST_ARGS Args&&... args) {
+#if defined(__CUDACC__) && !defined(__CUDA_ARCH__)
+    if (CUDAkernel) {
+      void* argPtrs[] = {(void*)&args...};
+      cudaLaunchKernel((void*)f, grid, block, argPtrs, shared_mem, stream);
+      return return_type_t<F>();
+    }
+    return f(static_cast<Args>(args)...);
+#else
+    return f(static_cast<Args>(args)...);
+#endif
+  }
+
+  // for executing member-functions
+  template <bool EnablePadding, class... Rest, class ReturnType, class C,
+            class Obj, class... Args, class... fArgTypes,
+            typename std::enable_if<EnablePadding, bool>::type = true>
+  constexpr CUDA_HOST_DEVICE auto
+  execute_with_default_args(list<Rest...>, ReturnType C::*f, Obj&& obj,
+                            list<fArgTypes...>,
+                            Args&&... args) -> return_type_t<decltype(f)> {
+    return (static_cast<Obj>(obj).*f)((fArgTypes)(args)...,
+                                      static_cast<Rest>(nullptr)...);
+  }
+
+  template <bool EnablePadding, class... Rest, class ReturnType, class C,
+            class Obj, class... Args, class... fArgTypes,
+            typename std::enable_if<!EnablePadding, bool>::type = true>
+  CLAD_CONSTEXPR_CXX14 auto
+  execute_with_default_args(list<Rest...>, ReturnType C::*f, Obj&& obj,
+                            list<fArgTypes...>,
+                            Args&&... args) -> return_type_t<decltype(f)> {
+    return (static_cast<Obj>(obj).*f)(static_cast<Args>(args)...);
+  }
+
+  // Using std::function and std::mem_fn introduces a lot of overhead, which we
+  // do not need. Another disadvantage is that it is difficult to distinguish a
+  // 'normal' use of std::{function,mem_fn} from the ones we must differentiate.
+  /// Marks a point where clad has not put a derivative in place yet.
+  ///
+  /// Deliberately not constexpr, and empty so that clad can differentiate
+  /// through it. Calling it makes the enclosing expression non-constant, so
+  /// the compiler reports that rather than working out an answer from a null
+  /// derivative -- a zero indistinguishable from a derivative that really is
+  /// zero. At run time it does nothing.
+  CUDA_HOST_DEVICE inline void NoDerivativeYet() {}
+
+  /// Explicitly passing `FunctorT` type is necessary for maintaining
+  /// const correctness of functor types.
+  /// Default value of `Functor` here is temporary, and should be removed
+  /// once all clad differentiation functions support differentiating functors.
+  template <typename F, typename FunctorT = ExtractFunctorTraits_t<F>,
+            bool EnablePadding = false>
+  /// \ingroup runtime
+  class CladFunction {
+  public:
+    using CladFunctionType = F;
+    using FunctorType = FunctorT;
+
+  private:
+    CladFunctionType m_Function;
+    const char* m_Code;
+    FunctorType *m_Functor = nullptr;
+    bool m_CUDAkernel = false;
+
+  public:
+    /// Wraps the derivative function \p f. \p code is the derivative's textual
+    /// source, used only by dump(); clad's plugin injects it as a string
+    /// literal.
+    ///
+    /// \warning \p code must have static storage duration: it is stored by
+    /// pointer and never copied, so a non-static buffer would dangle. Every
+    /// clad entry point defaults it to "" and the plugin rewrites that to a
+    /// StringLiteral, so the precondition holds for all generated code.
+    CLAD_CONSTEXPR_CXX14 CUDA_HOST_DEVICE
+    CladFunction(CladFunctionType f, const char* code,
+                 FunctorType* functor = nullptr, bool CUDAkernel = false)
+        : m_Function(f), m_Code(code), m_Functor(functor),
+          m_CUDAkernel(CUDAkernel) {
+#ifndef __CLAD__
+      static_assert(false, "clad doesn't appear to be loaded; make sure that "
+                           "you pass clad.so to clang.");
+#endif
+      // clad fills \p f in by rewriting the call that produced it, which
+      // happens after the compiler has first tried to work out the
+      // initialiser of the variable being built here. Failing that first
+      // attempt is what makes the compiler work the value out again, once
+      // \p f is set; letting it succeed stores the null for good. See #2188.
+      if (!f)
+        NoDerivativeYet();
+      // `code` is a clad-emitted string literal (static storage duration), so
+      // point at it directly instead of malloc'ing a copy that was never freed
+      // (LeakSanitizer flagged it). This keeps CladFunction trivially
+      // destructible, which constant evaluation and CUDA require.
+    }
+
+    /// Constructor overload for initializing `m_Functor` when functor
+    /// is passed by reference.
+    CUDA_HOST_DEVICE CladFunction(CladFunctionType f, const char* code,
+                                  FunctorType& functor)
+        : CladFunction(f, code, &functor) {};
+
+    constexpr CUDA_HOST_DEVICE CladFunction(CladFunctionType f,
+                                            FunctorType& functor)
+        : CladFunction(f, &functor) {};
+
+    // No destructor: m_Code is a static-duration literal, not heap, so there is
+    // nothing to free and CladFunction stays trivially destructible.
+
+    constexpr CladFunctionType getFunctionPtr() const { return m_Function; }
+
+    template <typename... Args, class FnType = CladFunctionType>
+    typename std::enable_if<!std::is_same<FnType, NoFunction*>::value,
+                            return_type_t<F>>::type
+        CLAD_CONSTEXPR_CXX14 CUDA_HOST_DEVICE
+        execute(Args&&... args) const {
+      if (!m_Function) {
+        NoDerivativeYet();
+        return static_cast<return_type_t<F>>(return_type_t<F>());
+      }
+      if (m_CUDAkernel) {
+        printf("Use execute_kernel() for global CUDA kernels\n");
+        return static_cast<return_type_t<F>>(return_type_t<F>());
+      }
+      // here static_cast is used to achieve perfect forwarding
+#ifdef __CUDACC__
+      return execute_helper(m_Function, m_CUDAkernel, dim3(0), dim3(0),
+                            std::forward<Args>(args)...);
+#else
+      return execute_helper(m_Function, std::forward<Args>(args)...);
+#endif
+    }
+
+#ifdef __CUDACC__
+    template <typename... Args, class FnType = CladFunctionType>
+    typename std::enable_if<!std::is_same<FnType, NoFunction*>::value,
+                            return_type_t<F>>::type
+    execute_kernel(dim3 grid, dim3 block, Args&&... args) CUDA_HOST_DEVICE {
+      if (!m_Function) {
+        printf("CladFunction is invalid\n");
+        return static_cast<return_type_t<F>>(return_type_t<F>());
+      }
+      if (!m_CUDAkernel) {
+        printf("Use execute() for non-global CUDA kernels\n");
+        return static_cast<return_type_t<F>>(return_type_t<F>());
+      }
+
+      return execute_helper(m_Function, m_CUDAkernel, grid, block,
+                            static_cast<Args>(args)...);
+    }
+#endif
+
+    /// `Execute` overload to be used when derived function type cannot be
+    /// deduced. One reason for this can be when user tries to differentiate
+    /// an object of class which do not have user-defined call operator.
+    /// Error handling is handled in the clad side using clang diagnostics 
+    /// subsystem.
+    template <typename... Args, class FnType = CladFunctionType>
+    typename std::enable_if<std::is_same<FnType, NoFunction*>::value,
+                            return_type_t<F>>::type constexpr CUDA_HOST_DEVICE
+    execute(Args&&... args) const {
+      return static_cast<return_type_t<F>>(0);
+    }
+
+    template <typename... Args>
+    constexpr CUDA_HOST_DEVICE auto operator()(Args&&... args) const
+        -> decltype(this->execute(std::forward<Args>(args)...)) {
+      return execute(std::forward<Args>(args)...);
+    }
+
+    /// Return the string representation for the generated derivative.
+    CLAD_CONSTEXPR_CXX14 const char* getCode() const {
+      if (m_Code)
+        return m_Code;
+      return "<invalid>";
+    }
+
+    void dump() const {
+      printf("The code is: \n%s\n", getCode());
+    }
+
+    /// Set object pointed by the functor as the default object for
+    /// executing derived member function.
+    void setObject(FunctorType* functor) {
+      m_Functor = functor;
+    } 
+
+    /// Set functor object as the default object for executing derived
+    // member function.
+    void setObject(FunctorType& functor) {
+      m_Functor = &functor;
+    }
+
+    /// Clears default object (if any) for executing derived member function.
+    void clearObject() {
+      m_Functor = nullptr;
+    }
+
+    private:
+      /// Helper function for executing non-member derived functions.
+      template <class Fn, class... Args>
+      CLAD_CONSTEXPR_CXX14 CUDA_HOST_DEVICE return_type_t<CladFunctionType>
+      execute_helper(Fn f, CUDA_ARGS Args&&... args) const {
+        // `static_cast` is required here for perfect forwarding.
+#if defined(__CUDACC__)
+        if constexpr (sizeof...(Args) >= 2) {
+          auto secondArg =
+              std::get<1>(std::forward_as_tuple(std::forward<Args>(args)...));
+          if constexpr (std::is_same<std::decay_t<decltype(secondArg)>,
+                                     cudaStream_t>::value) {
+            return [&](auto shared_mem, cudaStream_t stream, auto&&... args_) {
+              return execute_with_default_args<EnablePadding>(
+                  DropArgs_t<sizeof...(Args) - 2, F>{}, f,
+                  TakeNFirstArgs_t<sizeof...(Args) - 2, decltype(f)>{},
+                  CUDAkernel, grid, block, shared_mem, stream,
+                  static_cast<decltype(args_)>(args_)...);
+            }(static_cast<Args>(args)...);
+          } else {
+            return execute_with_default_args<EnablePadding>(
+                DropArgs_t<sizeof...(Args), F>{}, f,
+                TakeNFirstArgs_t<sizeof...(Args), decltype(f)>{}, CUDAkernel,
+                grid, block, 0, nullptr, static_cast<Args>(args)...);
+          }
+        } else {
+          return execute_with_default_args<EnablePadding>(
+              DropArgs_t<sizeof...(Args), F>{}, f,
+              TakeNFirstArgs_t<sizeof...(Args), decltype(f)>{}, CUDAkernel,
+              grid, block, 0, nullptr, static_cast<Args>(args)...);
+        }
+#else
+        return execute_with_default_args<EnablePadding>(
+            DropArgs_t<sizeof...(Args), F>{}, f,
+            TakeNFirstArgs_t<sizeof...(Args), decltype(f)>{},
+            static_cast<Args>(args)...);
+#endif
+      }
+
+      /// Helper functions for executing member derived functions.
+      /// If user have passed object explicitly, then this specialization will
+      /// be used and derived function will be called through the passed object.
+      template <class ReturnType, class C, class Obj,
+                class = typename std::enable_if<std::is_same<
+                    typename std::decay<Obj>::type, C>::value>::type,
+                class... Args>
+      CLAD_CONSTEXPR_CXX14 return_type_t<CladFunctionType>
+      execute_helper(ReturnType C::*f, Obj&& obj, Args&&... args) const {
+        // `static_cast` is required here for perfect forwarding.
+        return execute_with_default_args<EnablePadding>(
+            DropArgs_t<sizeof...(Args), decltype(f)>{}, f,
+            static_cast<Obj>(obj),
+            TakeNFirstArgs_t<sizeof...(Args), decltype(f)>{},
+            static_cast<Args>(args)...);
+      }
+      /// If user have not passed object explicitly, then this specialization
+      /// will be used and derived function will be called through the object
+      /// saved in `CladFunction`.
+      template <class ReturnType, class C, class... Args>
+      CLAD_CONSTEXPR_CXX14 return_type_t<CladFunctionType>
+      execute_helper(ReturnType C::*f, Args&&... args) const {
+        // `static_cast` is required here for perfect forwarding.
+        return execute_with_default_args<EnablePadding>(
+            DropArgs_t<sizeof...(Args), decltype(f)>{}, f, *m_Functor,
+            TakeNFirstArgs_t<sizeof...(Args), decltype(f)>{},
+            static_cast<Args>(args)...);
+      }
+  };
+
+  // This is the function which will be instantiated with the concrete arguments
+  // After that our AD library will have all the needed information. For eg:
+  // which is the differentiated function, which is the argument with respect
+  // to.
+  //
+  // This will be useful in future when we are ready to support partial diff.
+  //
+
+  /// Differentiates function using forward mode.
+  ///
+  /// Performs partial differentiation of the `fn` argument using forward mode
+  /// wrt parameter specified in `args`. Template parameter `BitMaskedOpts`
+  /// denotes the derivative order and any extra options. To differentiate `fn`
+  /// wrt several parameters, please see `clad::gradient`.
+  ///
+  /// \param[in] fn function to differentiate
+  /// \param[in] args independent parameter information
+  /// \param[in] derivedFn the generated derivative; clad substitutes it while
+  /// compiling the call, so a caller leaves it alone.
+  /// \param[in] code the source of that derivative, substituted the same way.
+  /// \returns `CladFunction` object to access the corresponding derived
+  /// function.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F,
+            typename DerivedFnType = ExtractDerivedFnTraitsForwMode_t<F>,
+            typename = typename std::enable_if<
+                !clad::HasOption(GetBitmaskedOpts(BitMaskedOpts...),
+                                 opts::vector_mode) &&
+                !std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<
+      DerivedFnType, ExtractFunctorTraits_t<F>> __attribute__((annotate("D")))
+  differentiate(F fn, ArgSpec args = "",
+                DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+                const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>>(derivedFn,
+                                                                  code);
+  }
+
+  /// Specialization for differentiating functors.
+  /// The specialization is needed because objects have to be passed
+  /// by reference whereas functions have to be passed by value.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F,
+            typename DerivedFnType = ExtractDerivedFnTraitsForwMode_t<F>,
+            typename = typename std::enable_if<
+                !clad::HasOption(GetBitmaskedOpts(BitMaskedOpts...),
+                                 opts::vector_mode) &&
+                std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<
+      DerivedFnType, ExtractFunctorTraits_t<F>> __attribute__((annotate("D")))
+  differentiate(F&& f, ArgSpec args = "",
+                DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+                const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>>(derivedFn,
+                                                                  code, f);
+  }
+
+  /// Generates function which computes derivative of `fn` argument w.r.t
+  /// all parameters using a vectorized version of forward mode.
+  ///
+  /// \param[in] fn function to differentiate
+  /// \param[in] args independent parameters information
+  /// \param[in] derivedFn the generated derivative; clad substitutes it while
+  /// compiling the call, so a caller leaves it alone.
+  /// \param[in] code the source of that derivative, substituted the same way.
+  /// \returns `CladFunction` object to access the corresponding derived
+  /// function.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F,
+            typename DerivedFnType = ExtractDerivedFnTraitsVecForwMode_t<F>,
+            typename = typename std::enable_if<
+                clad::HasOption(GetBitmaskedOpts(BitMaskedOpts...),
+                                opts::vector_mode) &&
+                !std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>,
+                         true> __attribute__((annotate("D")))
+  differentiate(F fn, ArgSpec args = "",
+                DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+                const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>, true>(
+        derivedFn, code);
+  }
+
+  /// Generates function which computes gradient of the given function wrt the
+  /// parameters specified in `args` using reverse mode differentiation.
+  ///
+  /// \param[in] f function to differentiate
+  /// \param[in] args independent parameters information
+  /// \param[in] derivedFn the generated derivative; clad substitutes it while
+  /// compiling the call, so a caller leaves it alone.
+  /// \param[in] code the source of that derivative, substituted the same way.
+  /// \param[in] CUDAkernel whether the function is a __global__ kernel, whose
+  /// derivative has to be launched rather than called.
+  /// \returns `CladFunction` object to access the corresponding derived
+  /// function.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F, typename DerivedFnType = GradientDerivedFnTraits_t<F>,
+            typename = typename std::enable_if<
+                !std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>,
+                         true> __attribute__((annotate("G"))) CUDA_HOST_DEVICE
+  gradient(F f, ArgSpec args = "",
+           DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+           const char* code = "", bool CUDAkernel = false) {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>, true>(
+        derivedFn /* will be replaced by gradient*/, code, nullptr, CUDAkernel);
+  }
+
+  /// Specialization for differentiating functors.
+  /// The specialization is needed because objects have to be passed
+  /// by reference whereas functions have to be passed by value.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F, typename DerivedFnType = GradientDerivedFnTraits_t<F>,
+            typename = typename std::enable_if<
+                std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>,
+                         true> __attribute__((annotate("G"))) CUDA_HOST_DEVICE
+  gradient(F&& f, ArgSpec args = "",
+           DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+           const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>, true>(
+        derivedFn /* will be replaced by gradient*/, code, f);
+  }
+
+  /// Generates function which computes hessian matrix of the given function wrt
+  /// the parameters specified in `args`.
+  ///
+  /// \param[in] f function to differentiate
+  /// \param[in] args independent parameters information
+  /// \param[in] derivedFn the generated derivative; clad substitutes it while
+  /// compiling the call, so a caller leaves it alone.
+  /// \param[in] code the source of that derivative, substituted the same way.
+  /// \returns `CladFunction` object to access the corresponding derived
+  /// function.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F, typename DerivedFnType = HessianDerivedFnTraits_t<F>,
+            typename = typename std::enable_if<
+                !std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<
+      DerivedFnType, ExtractFunctorTraits_t<F>> __attribute__((annotate("H")))
+  hessian(F f, ArgSpec args = "",
+          DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+          const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>>(
+        derivedFn /* will be replaced by hessian*/, code);
+  }
+
+  /// Specialization for differentiating functors.
+  /// The specialization is needed because objects have to be passed
+  /// by reference whereas functions have to be passed by value.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F, typename DerivedFnType = HessianDerivedFnTraits_t<F>,
+            typename = typename std::enable_if<
+                std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<
+      DerivedFnType, ExtractFunctorTraits_t<F>> __attribute__((annotate("H")))
+  hessian(F&& f, ArgSpec args = "",
+          DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+          const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>>(
+        derivedFn /* will be replaced by hessian*/, code, f);
+  }
+
+  /// Generates function which computes jacobian matrix of the given function
+  /// wrt the parameters specified in `args` using reverse mode differentiation.
+  ///
+  /// \param[in] f function to differentiate
+  /// \param[in] args independent parameters information
+  /// \param[in] derivedFn the generated derivative; clad substitutes it while
+  /// compiling the call, so a caller leaves it alone.
+  /// \param[in] code the source of that derivative, substituted the same way.
+  /// \returns `CladFunction` object to access the corresponding derived
+  /// function.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F, typename DerivedFnType = JacobianDerivedFnTraits_t<F>,
+            typename = typename std::enable_if<
+                !std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>,
+                         /*EnablePadding=*/true> __attribute__((annotate("J")))
+  jacobian(F f, ArgSpec args = "",
+           DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+           const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>,
+                        /*EnablePadding=*/true>(
+        derivedFn /* will be replaced by Jacobian*/, code);
+  }
+
+  /// Specialization for differentiating functors.
+  /// The specialization is needed because objects have to be passed
+  /// by reference whereas functions have to be passed by value.
+  template <unsigned... BitMaskedOpts, typename ArgSpec = const char*,
+            typename F, typename DerivedFnType = JacobianDerivedFnTraits_t<F>,
+            typename = typename std::enable_if<
+                std::is_class<remove_reference_and_pointer_t<F>>::value>::type>
+  constexpr CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>,
+                         /*EnablePadding=*/true> __attribute__((annotate("J")))
+  jacobian(F&& f, ArgSpec args = "",
+           DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+           const char* code = "") {
+    return CladFunction<DerivedFnType, ExtractFunctorTraits_t<F>,
+                        /*EnablePadding=*/true>(
+        derivedFn /* will be replaced by Jacobian*/, code, f);
+  }
+
+  template <typename ArgSpec = const char*, typename F,
+            typename DerivedFnType = GradientDerivedEstFnTraits_t<F>>
+  constexpr CladFunction<DerivedFnType> __attribute__((annotate("E")))
+  estimate_error(F f, ArgSpec args = "",
+                 DerivedFnType derivedFn = static_cast<DerivedFnType>(nullptr),
+                 const char* code = "") {
+    return CladFunction<
+        DerivedFnType>(derivedFn /* will be replaced by estimation code*/,
+                       code);
+  }
+
+#ifdef _OPENMP
+  inline void GetStaticSchedule(int lo, int hi, int stride, int* threadlo,
+                                int* threadhi) {
+    /* Static OpenMP scheduler, identical to what LLVM would use. Each thread
+       gets one chunk of consecutive iterations. The number of iterations per
+       chunk is aproximately trip_count/num_threads. If the trip count can not
+       be evenly divided among threads, the first few threads get one extra
+       iteration. As long as the number of threads stays constant, and when
+       called by the same thread, this subroutine will always return the same
+       threadstart and threadend when given the same imin,imax,istride as input.
+     */
+    assert(stride);
+    /* formula to compute the number of iterations */
+    int trip_count = (hi - lo + stride) / stride;
+    trip_count = std::max(trip_count, 0);
+
+    int nth = omp_get_num_threads();
+    int tid = omp_get_thread_num();
+
+    if (trip_count < nth) {
+      /* fewer iterations than threads. some threads will get one iteration,
+         the other threads will get nothing. */
+      if (tid < trip_count) {
+        /* do one iteration */
+        *threadlo = lo + tid * stride;
+        *threadhi = *threadlo;
+      } else {
+        /* do nothing */
+        *threadhi = 0;
+        *threadlo = *threadhi + stride;
+      }
+    }
+    /* at least one iteration per thread. since the total number of iterations
+       may not be evenly dividable by the number of threads, there will be a few
+       extra iterations. the first few threads will each get one of those, which
+       results in some offsetts that are applied to the start and end of the
+       chunks. */
+    else {
+      int chunksize = trip_count / nth;
+      int extras = trip_count % nth;
+      int tidextras = (tid < extras) ? tid : extras;
+      int incr = (tid < extras) ? 0 : stride;
+      *threadlo = lo + (tid * chunksize + tidextras) * stride;
+      *threadhi = *threadlo + chunksize * stride - incr;
+    }
+  }
+#endif
+  } // namespace clad
+#endif // CLAD_DIFFERENTIATOR
+
+// Enable clad after the header was included.
+// FIXME: The header inclusion should be made automatic if the pragma is seen.
+#pragma clad ON

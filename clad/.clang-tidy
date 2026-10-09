@@ -1,0 +1,98 @@
+# Two checks are off for reasons that outlive any one patch:
+#
+# llvm-header-guard derives the expected guard from the absolute path, so for
+# the 28 headers outside include/ it asks for the checkout directory and no
+# committed value can satisfy it. Upstream declined to make it configurable
+# (llvm/llvm-project#71732), and the rest of what it encodes -- include/,
+# tools/clang/, the LLVM_CLANG_ and FORTRAN_ prefixes -- is LLVM's own layout.
+#
+# cppcoreguidelines-avoid-const-or-ref-data-members exists to stop a value type
+# losing copy-assignment by accident. Clad's visitors and analyzers are not
+# value types: they are short-lived objects holding references to compiler
+# state that outlives them, 38 such members across VisitorBase,
+# DerivativeBuilder, DiffPlanner and the rest.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  llvm-*,
+  misc-*,
+  modernize-*,
+  openmp-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-narrowing-conversions,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-unchecked-optional-access,
+  -misc-const-correctness,
+  -misc-unused-parameters,
+  -misc-non-private-member-variables-in-classes,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -cppcoreguidelines-macro-usage,
+  -misc-use-anonymous-namespace,
+  -modernize-return-braced-init-list,
+  -modernize-use-trailing-return-type,
+  -readability-use-anyofallof,
+  -readability-braces-around-statements,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-named-parameter,
+  -readability-function-cognitive-complexity,
+  -readability-implicit-bool-conversion,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  -llvm-header-guard,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+
+CheckOptions:
+  - key:             readability-identifier-naming.ClassCase
+    value:           aNy_CasE
+  - key:             readability-identifier-naming.FunctionCase
+    value:           aNy_CasE
+  - key:             readability-identifier-naming.MemberCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.PrivateMemberCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.PrivateMemberPrefix
+    value:           'm_'
+  - key: readability-identifier-naming.ProtectedMemberCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.ProtectedMemberPrefix
+    value:           'm_'
+  - key:             readability-identifier-naming.PublicMemberPrefix
+    value:           ''
+  - key:             readability-identifier-naming.ParameterCase
+    value:           aNy_CasE
+  - key:             readability-identifier-naming.UnionCase
+    value:           CamelCase
+  - key:             readability-identifier-naming.VariableCase
+    value:           aNy_CasE
+  - key:             readability-identifier-naming.IgnoreMainLikeFunctions
+    value:           1
+  - key:             readability-implicit-bool-conversion.AllowPointerConditions
+    value:           1
+  - key:             readability-magic-numbers.IgnorePowersOf2IntegerValues
+    value:           1
+  - key:             readability-magic-numbers.IgnoredIntegerValues
+    value:           4;8;16;
+  - key:             bugprone-argument-comment.CommentNullPtrs
+    value:           1
+  - key:             bugprone-argument-comment.CommentBoolLiterals
+    value:           1
+  - key:             bugprone-argument-comment.StrictMode
+    value:           1
+  - key:             bugprone-argument-comment.CommentIntegerLiterals
+    value:           1
+  - key:             bugprone-argument-comment.CommentUserDefinedLiterals
+    value:           1
+  - key:             bugprone-argument-comment.CommentStringLiterals
+    value:           1
+  - key:             bugprone-argument-comment.CommentFloatLiterals
+    value:           1
+  - key:             bugprone-argument-comment.CommentCharacterLiterals
+    value:           1

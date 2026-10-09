@@ -84,6 +84,7 @@ public:
   void doEval(RooFit::EvalContext &ctx) const override;
 
   std::string getUniqueFuncName() const;
+  std::string getUniqueFuncCode() const;
 
   std::unique_ptr<RooAbsArg>
   compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileContext &ctx) const override;

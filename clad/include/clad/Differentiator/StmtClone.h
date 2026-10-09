@@ -1,0 +1,171 @@
+//--------------------------------------------------------------------*- C++ -*-
+// clad - the C++ Clang-based Automatic Differentiator
+// author:  Vassil Vassilev <vvasilev-at-cern.ch>
+//------------------------------------------------------------------------------
+//
+// File originates from the Scout project (http://scout.zih.tu-dresden.de/)
+
+#ifndef CLAD_UTILS_STMTCLONE_H
+#define CLAD_UTILS_STMTCLONE_H
+
+#include "Compatibility.h"
+
+#include "clang/AST/ExprCXX.h"
+#include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/StmtVisitor.h"
+#include "clang/Basic/Version.h"
+#include "clang/Sema/Scope.h"
+#include "clang/Sema/Sema.h"
+
+#include "llvm/ADT/DenseMap.h"
+#include <unordered_map>
+
+namespace clang {
+  class Stmt;
+  class ValueDecl;
+}
+
+namespace clad {
+namespace utils {
+
+  /// \ingroup astutils
+  class StmtClone : public clang::StmtVisitor<StmtClone, clang::Stmt*>  {
+  public:
+  private:
+    clang::Sema& m_Sema;
+    clang::ASTContext& Ctx;
+    // While cloning a PseudoObjectExpr, maps each original OpaqueValueExpr to
+    // its clone so the syntactic form and the semantic expressions reference
+    // the same fresh OVE (null outside such a clone). See
+    // VisitPseudoObjectExpr.
+    llvm::DenseMap<clang::OpaqueValueExpr*, clang::OpaqueValueExpr*>*
+        m_OVESubst = nullptr;
+
+    clang::Decl* CloneDecl(clang::Decl* Node);
+    clang::VarDecl* CloneDeclOrNull(clang::VarDecl* Node);
+
+  public:
+    StmtClone(clang::Sema& sema, clang::ASTContext& ctx)
+        : m_Sema(sema), Ctx(ctx) {}
+
+    template<class StmtTy>
+    StmtTy* Clone(const StmtTy* S);
+
+    /// Cloning types is necessary since VariableArrayType
+    /// store a pointer to their size expression.
+    clang::QualType CloneType(clang::QualType T);
+
+    // visitor part (not for public use)
+    // Stmt.def could be used if ABSTR_STMT is introduced
+#define DECLARE_CLONE_FN(CLASS) clang::Stmt* Visit ## CLASS(clang::CLASS *Node);
+    DECLARE_CLONE_FN(BinaryOperator)
+    DECLARE_CLONE_FN(UnaryOperator)
+    DECLARE_CLONE_FN(ReturnStmt)
+    DECLARE_CLONE_FN(GotoStmt)
+    DECLARE_CLONE_FN(IfStmt)
+    DECLARE_CLONE_FN(ForStmt)
+    DECLARE_CLONE_FN(NullStmt)
+    DECLARE_CLONE_FN(LabelStmt)
+    DECLARE_CLONE_FN(CompoundStmt)
+    DECLARE_CLONE_FN(DeclRefExpr)
+    DECLARE_CLONE_FN(DeclStmt)
+    DECLARE_CLONE_FN(IntegerLiteral)
+    DECLARE_CLONE_FN(SwitchStmt)
+    DECLARE_CLONE_FN(CaseStmt)
+    DECLARE_CLONE_FN(DefaultStmt)
+    DECLARE_CLONE_FN(WhileStmt)
+    DECLARE_CLONE_FN(DoStmt)
+    DECLARE_CLONE_FN(ContinueStmt)
+    DECLARE_CLONE_FN(BreakStmt)
+    DECLARE_CLONE_FN(CXXCatchStmt)
+    DECLARE_CLONE_FN(CXXTryStmt)
+    DECLARE_CLONE_FN(PredefinedExpr)
+    DECLARE_CLONE_FN(SourceLocExpr)
+    DECLARE_CLONE_FN(CharacterLiteral)
+    DECLARE_CLONE_FN(FloatingLiteral)
+    DECLARE_CLONE_FN(ImaginaryLiteral)
+    DECLARE_CLONE_FN(StringLiteral)
+    DECLARE_CLONE_FN(ParenExpr)
+    DECLARE_CLONE_FN(ArraySubscriptExpr)
+    DECLARE_CLONE_FN(MemberExpr)
+    DECLARE_CLONE_FN(CompoundLiteralExpr)
+    DECLARE_CLONE_FN(ImplicitCastExpr)
+    DECLARE_CLONE_FN(UnresolvedLookupExpr)
+    DECLARE_CLONE_FN(CStyleCastExpr)
+    DECLARE_CLONE_FN(CompoundAssignOperator)
+    DECLARE_CLONE_FN(ConditionalOperator)
+    DECLARE_CLONE_FN(InitListExpr)
+    DECLARE_CLONE_FN(DesignatedInitExpr)
+    DECLARE_CLONE_FN(AddrLabelExpr)
+    DECLARE_CLONE_FN(StmtExpr)
+    DECLARE_CLONE_FN(ChooseExpr)
+    DECLARE_CLONE_FN(GNUNullExpr)
+    DECLARE_CLONE_FN(VAArgExpr)
+    DECLARE_CLONE_FN(ImplicitValueInitExpr)
+    DECLARE_CLONE_FN(ExtVectorElementExpr)
+    DECLARE_CLONE_FN(UnaryExprOrTypeTraitExpr)
+    DECLARE_CLONE_FN(CallExpr)
+    DECLARE_CLONE_FN(CUDAKernelCallExpr)
+    DECLARE_CLONE_FN(ShuffleVectorExpr)
+    DECLARE_CLONE_FN(ExprWithCleanups)
+    DECLARE_CLONE_FN(CXXOperatorCallExpr)
+    DECLARE_CLONE_FN(CXXMemberCallExpr)
+    DECLARE_CLONE_FN(CXXStaticCastExpr)
+    DECLARE_CLONE_FN(CXXDynamicCastExpr)
+    DECLARE_CLONE_FN(CXXReinterpretCastExpr)
+    DECLARE_CLONE_FN(CXXConstCastExpr)
+    DECLARE_CLONE_FN(CXXDefaultArgExpr)
+    DECLARE_CLONE_FN(CXXFunctionalCastExpr)
+    DECLARE_CLONE_FN(CXXBoolLiteralExpr)
+    DECLARE_CLONE_FN(CXXNullPtrLiteralExpr)
+    DECLARE_CLONE_FN(CXXThisExpr)
+    DECLARE_CLONE_FN(CXXThrowExpr)
+    DECLARE_CLONE_FN(CXXConstructExpr)
+    DECLARE_CLONE_FN(CXXTemporaryObjectExpr)
+    DECLARE_CLONE_FN(CXXBindTemporaryExpr)
+    DECLARE_CLONE_FN(CXXStdInitializerListExpr)
+    DECLARE_CLONE_FN(MaterializeTemporaryExpr)
+    DECLARE_CLONE_FN(PseudoObjectExpr)
+    DECLARE_CLONE_FN(OpaqueValueExpr)
+    DECLARE_CLONE_FN(MSPropertyRefExpr)
+    DECLARE_CLONE_FN(SubstNonTypeTemplateParmExpr)
+    DECLARE_CLONE_FN(CXXScalarValueInitExpr)
+    DECLARE_CLONE_FN(ConstantExpr)
+    DECLARE_CLONE_FN(ValueStmt)
+    DECLARE_CLONE_FN(LambdaExpr)
+
+    clang::Stmt* VisitStmt(clang::Stmt*);
+  };
+
+  template<class StmtTy>
+  StmtTy* StmtClone::Clone(const StmtTy* S) {
+    if (!S)
+      return 0;
+
+    clang::Stmt* clonedStmt = Visit(const_cast<StmtTy*>(S));
+    return static_cast<StmtTy*>(clonedStmt);
+  }
+
+  class ReferencesUpdater :
+    public clang::RecursiveASTVisitor<ReferencesUpdater> {
+  private:
+    clang::Sema& m_Sema; // We don't own.
+    clang::Scope* m_CurScope; // We don't own.
+    const clang::FunctionDecl* m_Function; // We don't own.
+    const std::unordered_map<const clang::VarDecl*, clang::VarDecl*>&
+        m_DeclReplacements; // We don't own.
+  public:
+    ReferencesUpdater(
+        clang::Sema& SemaRef, clang::Scope* S, const clang::FunctionDecl* FD,
+        const std::unordered_map<const clang::VarDecl*, clang::VarDecl*>&
+            DeclReplacements);
+    bool VisitDeclRefExpr(clang::DeclRefExpr* DRE);
+    bool VisitStmt(clang::Stmt* S);
+    /// Used to update the size expression of QT
+    /// if QT is VariableArrayType.
+    void updateType(clang::QualType QT);
+  };
+} // namespace utils
+} // namespace clad
+
+#endif  //CLAD_UTILS_STMTCLONE_H

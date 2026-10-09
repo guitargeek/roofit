@@ -195,7 +195,9 @@ endforeach()
 set(minuit2_test_root_libraries Core RIO Net Hist Graf Graf3d Gpad Tree
     Rint Postscript Matrix Physics MathCore Thread)
 set(minuit2_plugin_tests testMinimizer testCovariance)
-if(clad)
+# testADMinim differentiates in the interpreter, which needs the clad of the
+# ROOT installation, not the builtin one.
+if(ROOT_clad_FOUND)
   list(APPEND minuit2_plugin_tests testADMinim)
 endif()
 foreach(name ${minuit2_plugin_tests})

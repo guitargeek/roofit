@@ -440,51 +440,52 @@ void functorCodegenImpl(RooArg_t &arg, RooArgList const &variables, CodegenConte
    std::string funcAddrStr = TString::Format("0x%zx", reinterpret_cast<std::size_t>(arg.function())).Data();
    std::string wrapperName = "roo_functor_" + funcAddrStr;
 
+   std::string pullbackName = wrapperName + "_pullback";
+   std::string nStr = std::to_string(std::size(variables));
+
+   std::string type;
+   if constexpr (std::is_same_v<RooArg_t, RooFunctor1DBinding> || std::is_same_v<RooArg_t, RooFunctor1DPdfBinding>)
+      type = "::ROOT::Math::IGradientFunctionOneDim";
+   else
+      type = "::ROOT::Math::IGradientFunctionMultiDim";
+
+   std::string funcAddrCasted = "reinterpret_cast<" + type + " const *>(" + funcAddrStr + ")";
+
+   // The include is for the builtin clad, which compiles this code outside of
+   // the interpreter, where the header is known already.
+   std::string code = "#include <Math/IFunction.h>\n\n";
+
+   code += "double " + wrapperName +
+           "(double const *x) {\n"
+           "   return " +
+           funcAddrCasted +
+           "->operator()(x);\n"
+           "}\n\n"
+           "namespace clad::custom_derivatives {\n\n"
+           "void " +
+           pullbackName +
+           "(double const* x, double d_y, double *d_x) {\n"
+           "   double output[" +
+           nStr +
+           "]{};\n"
+           "   " +
+           funcAddrCasted +
+           "->Gradient(x, output);\n"
+           "   for (int i = 0; i < " +
+           nStr +
+           "; ++i) {\n"
+           "      d_x[i] += output[i] * d_y;\n"
+           "   }\n"
+           "}\n"
+           "} // namespace clad::custom_derivatives\n";
+
+   // The interpreter must see the wrapper only once per process, but the
+   // builtin clad needs it in every translation unit that calls it.
    static std::unordered_set<std::string> wrapperNames;
-
-   if (wrapperNames.find(wrapperName) == wrapperNames.end()) {
-
-      wrapperNames.insert(wrapperName);
-
-      std::string pullbackName = wrapperName + "_pullback";
-      std::string nStr = std::to_string(std::size(variables));
-
-      std::string type;
-      if constexpr (std::is_same_v<RooArg_t, RooFunctor1DBinding> || std::is_same_v<RooArg_t, RooFunctor1DPdfBinding>)
-         type = "::ROOT::Math::IGradientFunctionOneDim";
-      else
-         type = "::ROOT::Math::IGradientFunctionMultiDim";
-
-      std::string funcAddrCasted = "reinterpret_cast<" + type + " const *>(" + funcAddrStr + ")";
-
-      std::string code;
-
-      code += "double " + wrapperName +
-              "(double const *x) {\n"
-              "   return " +
-              funcAddrCasted +
-              "->operator()(x);\n"
-              "}\n\n"
-              "namespace clad::custom_derivatives {\n\n"
-              "void " +
-              pullbackName +
-              "(double const* x, double d_y, double *d_x) {\n"
-              "   double output[" +
-              nStr +
-              "]{};\n"
-              "   " +
-              funcAddrCasted +
-              "->Gradient(x, output);\n"
-              "   for (int i = 0; i < " +
-              nStr +
-              "; ++i) {\n"
-              "      d_x[i] += output[i] * d_y;\n"
-              "   }\n"
-              "}\n"
-              "} // namespace clad::custom_derivatives\n";
-
+   if (wrapperNames.insert(wrapperName).second) {
       gInterpreter->Declare(code.c_str());
    }
+   ctx.addSupportCode(wrapperName, code);
 
    ctx.addResult(&arg, ctx.buildCall(wrapperName, variables));
 }
@@ -519,6 +520,9 @@ void codegenImpl(RooFormulaVar &arg, CodegenContext &ctx)
    arg.getVal(); // to trigger the creation of the TFormula
    std::string funcName = arg.getUniqueFuncName();
    ctx.collectFunction(funcName);
+   // The interpreter knows the function from the TFormula; the builtin clad
+   // compiles the generated code on its own and needs its code.
+   ctx.addSupportCode(funcName, arg.getUniqueFuncCode());
    // We have to force the array type to be "double" because that's what the
    // declared function wrapped by the TFormula expects.
    auto inputVar = ctx.buildArg(arg.dependents(), /*arrayType=*/"double");
@@ -565,6 +569,9 @@ void codegenImpl(RooGenericPdf &arg, CodegenContext &ctx)
    arg.getVal(); // to trigger the creation of the TFormula
    std::string funcName = arg.getUniqueFuncName();
    ctx.collectFunction(funcName);
+   // The interpreter knows the function from the TFormula; the builtin clad
+   // compiles the generated code on its own and needs its code.
+   ctx.addSupportCode(funcName, arg.getUniqueFuncCode());
    // We have to force the array type to be "double" because that's what the
    // declared function wrapped by the TFormula expects.
    auto inputVar = ctx.buildArg(arg.dependents(), /*arrayType=*/"double");
@@ -1053,6 +1060,10 @@ std::string codegenIntegralImpl(RooMultiVarGaussian &arg, int code, const char *
 
 void codegenImpl(RooONNXFunc &arg, CodegenContext &ctx)
 {
+   // The model, the wrappers and their derivatives, for the builtin clad. The
+   // interpreter knows them since RooONNXFunc::initialize().
+   ctx.addSupportCode(arg.outerWrapperName(), arg.codegenSupportCode());
+
    std::stringstream ss;
    ss << arg.outerWrapperName() << "(";
    for (std::size_t i = 0; i < arg.nInputTensors(); ++i) {

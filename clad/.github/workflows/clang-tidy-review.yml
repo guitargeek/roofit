@@ -1,0 +1,68 @@
+name: clang-tidy-review
+
+on:
+  pull_request:
+    paths:
+      - '**.h'
+      - '**.cpp'
+      - '**.cu'
+      - '**.cuh'
+      # So a change to this job is exercised by this job.
+      - '.github/workflows/clang-tidy-review.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Pinned, not ubuntu-latest: `os` below names a recipe cache cell.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v7
+
+      # Provisions the toolchain and writes the compilation database,
+      # including commands for the CUDA sources CMake does not compile.
+      - name: Prepare the build clang-tidy reads
+        uses: compiler-research/ci-workflows/actions/setup-clang-tidy@main
+        with:
+          version: '22'
+          os: ubuntu-24.04
+          arch: x86_64
+          cuda-version: '12.8.1'
+          # Differentiator.h and CladtorchBuiltins.h keep code behind
+          # _OPENMP that is otherwise never parsed.
+          openmp: 'true'
+          # ThrustDerivatives.h and ThrustBuiltins.h include nothing of
+          # clad's own; they are written to follow this header.
+          force-include: clad/Differentiator/Differentiator.h
+          cmake-args: >-
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_CXX_FLAGS=-fexceptions
+
+      - name: Run clang-tidy
+        uses: ZedThree/clang-tidy-review@v0.23.1
+        id: review
+        with:
+          build_dir: build
+          # Where the database was written, so its paths get rewritten to
+          # the container's mount point.
+          base_dir: ${{ github.workspace }}
+          include: "*.[ch],*.[ch]xx,*.[ch]pp,*.[ch]++,*.cc,*.hh,*.cu,*.cuh"
+          clang_tidy_version: '21'
+          # clang-tidy still parses in the container, and these carry
+          # headers the sources reach. No plain libxml2: the review
+          # container is ubuntu 25.10, where that name has no installation
+          # candidate and libxml2-dev brings the runtime anyway.
+          apt_packages: libxml2-dev,libtinfo-dev,zlib1g-dev,libzstd-dev,libthrust-dev,libbenchmark-dev,libomp-21-dev,libopenblas-dev
+          exclude: "test/*,unittests/*"
+          split_workflow: true
+          # Load-bearing empty: the action passes --checks only when this is
+          # non-empty, and its default list carries none of the negations in
+          # clad's .clang-tidy. Empty, and with no config_file pinning one
+          # file, clang-tidy looks a config up beside each source instead.
+          clang_tidy_checks: ''
+
+      - name: Upload artifacts
+        uses: ZedThree/clang-tidy-review/upload@v0.23.1

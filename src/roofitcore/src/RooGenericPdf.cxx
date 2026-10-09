@@ -230,3 +230,10 @@ std::string RooGenericPdf::getUniqueFuncName() const
 {
    return evaluator().getTFormula()->GetUniqueFuncName().Data();
 }
+
+/// The code of the function named by getUniqueFuncName(), for compiling the
+/// generated code outside of the interpreter.
+std::string RooGenericPdf::getUniqueFuncCode() const
+{
+   return RooFormulaUtils::clingFunctionCode(*evaluator().getTFormula());
+}

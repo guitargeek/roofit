@@ -35,6 +35,10 @@ public:
 
    std::string funcName() const { return _funcName; }
    std::string outerWrapperName() const { return "TMVA_SOFIE_" + funcName() + "::roo_outer_wrapper"; }
+   /// The code that the codegen backend needs to compile a function that uses
+   /// this object outside of the interpreter: the model, the wrappers, and the
+   /// request for their derivatives. See CodegenContext::addSupportCode().
+   std::string const &codegenSupportCode() const { return _codegenSupportCode; }
 
 protected:
    double evaluate() const override;
@@ -53,6 +57,7 @@ private:
    std::shared_ptr<RuntimeCache> _runtime;                   ///<! Transient runtime information.
    mutable std::vector<float> _inputBuffer;                  ///<!
    std::string _funcName;                                    ///<!
+   std::string _codegenSupportCode;                          ///<!
 
    ClassDefOverride(RooONNXFunc, 1)
 };

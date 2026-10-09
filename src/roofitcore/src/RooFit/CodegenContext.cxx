@@ -368,6 +368,8 @@ CodegenContext::buildFunction(RooAbsArg const &arg, std::unordered_set<RooFit::D
    ctx._xlArr = _xlArr;
    ctx._collectedFunctions = _collectedFunctions;
    ctx._collectedCode = _collectedCode;
+   ctx._supportCode = _supportCode;
+   ctx._supportCodeKeys = _supportCodeKeys;
 
    static int iCodegen = 0;
    auto funcName = "roo_codegen_" + std::to_string(iCodegen++);
@@ -388,8 +390,25 @@ CodegenContext::buildFunction(RooAbsArg const &arg, std::unordered_set<RooFit::D
    _xlArr = ctx._xlArr;
    _collectedFunctions = ctx._collectedFunctions;
    _collectedCode = ctx._collectedCode;
+   _supportCode = ctx._supportCode;
+   _supportCodeKeys = ctx._supportCodeKeys;
 
    return funcName;
+}
+
+/// @brief Collect code that the generated functions depend on besides the
+/// headers, like the wrappers around function pointers that codegenImpl()
+/// creates for RooFunctorBinding or RooONNXFunc. The interpreter has to see
+/// such code only once per process, which the caller takes care of. The builtin
+/// clad on the other hand compiles each function on its own, together with
+/// everything it depends on, so the code is collected here. The key makes sure
+/// that it is collected only once per context.
+void CodegenContext::addSupportCode(std::string const &key, std::string const &code)
+{
+   if (_supportCodeKeys.insert(key).second) {
+      _supportCode += code;
+      _supportCode += "\n";
+   }
 }
 
 void declareDispatcherCode(std::string const &funcName)

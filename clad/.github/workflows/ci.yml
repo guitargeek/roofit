@@ -1,0 +1,1147 @@
+name: Main
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+    # labeled as well, so that run-post-merge can ask for the gates below
+    # without waiting for a push that has nothing to do with them.
+    types: [opened, synchronize, reopened, labeled]
+
+# A label gets a group of its own. It asks for the gates below without
+# touching a file, so it has no business cancelling the build it arrives
+# beside -- and concurrency is settled before any job's `if`, so the decision
+# job cannot save a run that was already cancelled here.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha
+         }}-${{ github.event.action == 'labeled' && 'label' || 'build' }}
+  cancel-in-progress: true
+
+jobs:
+  # docs/, .readthedocs.yaml and requirements.txt are readthedocs' inputs and
+  # nobody else's. The invariant that makes that true is that no row sets
+  # CLAD_INCLUDE_DOCS, which is what would have cmake descend into docs/; add
+  # a row that sets it and this gate stops testing it. readthedocs reports its
+  # own check, so a change confined to those three needs no matrix.
+  #
+  # paths-ignore on the pull_request trigger is the obvious way and the wrong
+  # one. Merging needs `Tests observe the change` and `codecov/patch`, both
+  # produced by this workflow, and a workflow that a path filter skips reports
+  # no checks at all -- the pull request would wait on them for ever. Gating
+  # jobs leaves the two that produce them running instead: observes-change
+  # runs whatever its needs did, and coverage is measured on a self-hosted row
+  # that is not gated. Gating that row too would strand the pull request, as
+  # #2098 shows: its coverage row failed, nothing was uploaded, and
+  # codecov/patch never appeared.
+  rebuild-needed:
+    name: Decide whether to rebuild
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    outputs:
+      value: ${{ steps.decide.outputs.value }}
+      build_system: ${{ steps.decide.outputs.build_system }}
+    steps:
+    - name: Decide
+      id: decide
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT_NAME: ${{ github.event_name }}
+        ACTION: ${{ github.event.action }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        # A label moves no file. The gates it asks for do not go through this
+        # job, so answering false here is what keeps a label from replaying
+        # the whole matrix.
+        if [ "$ACTION" = labeled ]; then
+          echo 'value=false' >> "$GITHUB_OUTPUT"
+          echo 'build_system=false' >> "$GITHUB_OUTPUT"
+          echo "A label changes no file; clad is not rebuilt." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if [ "$EVENT_NAME" != pull_request ]; then
+          echo 'value=true' >> "$GITHUB_OUTPUT"
+          # The two rows that build LLVM from source stay off after a merge:
+          # they are here to answer before one, and the pull request that
+          # changed these files has already been asked.
+          echo 'build_system=false' >> "$GITHUB_OUTPUT"
+          echo "A $EVENT_NAME builds everything." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+                  --jq '.[].filename')
+        # README.md is deliberately not on this list. test/Documentation
+        # compiles the code shown in it and fails when the two drift apart,
+        # so editing it changes what the suite asserts.
+        rest=$(printf '%s\n' "$files" | grep -Ev \
+                 '^docs/|^\.readthedocs\.yaml$|^requirements\.txt$' || true)
+        # What decides how clad is built, and so what the two rows below are
+        # the only ones able to check. The tables and the tool that renders
+        # them are in here with the cmake files: the build rules exist to run
+        # that tool, and its output is what those rows failed to find.
+        # This file too: a change to the rows below has to run them, or the
+        # only way to find out whether they still catch anything is to wait for
+        # the consumer they exist for to break again.
+        build_system=$(printf '%s\n' "$files" | grep -E \
+                 '(^|/)CMakeLists\.txt$|\.cmake$|^cmake/|^utils/clad-tblgen/|\.td$|^\.github/workflows/ci\.yml$' \
+                 || true)
+        # Fail open for the same reason the decision below does: no file list
+        # means the question went unanswered, not that nothing changed.
+        if [ -z "$files" ] || [ -n "$build_system" ]; then
+          echo 'build_system=true' >> "$GITHUB_OUTPUT"
+          { echo 'Building clad in LLVM and against an LLVM build tree. Changed:'
+            printf '%s\n' "${build_system:-<unknown>}" | head -10 | sed 's/^/    /'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        else
+          echo 'build_system=false' >> "$GITHUB_OUTPUT"
+        fi
+        # Each branch says what it decided and why. The matrix condition is
+        # fail-open, so a full build is also what an empty output produces:
+        # without this the log cannot tell a decision from a broken one.
+        if [ -z "$files" ]; then
+          # No file list means the question went unanswered, not that
+          # nothing changed.
+          echo 'value=true' >> "$GITHUB_OUTPUT"
+          echo 'The pull request listed no files; building rather than guessing.' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+        elif [ -n "$rest" ]; then
+          echo 'value=true' >> "$GITHUB_OUTPUT"
+          { echo 'Rebuilding clad. Changed files readthedocs does not own:'
+            printf '%s\n' "$rest" | head -10 | sed 's/^/    /'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        else
+          echo 'value=false' >> "$GITHUB_OUTPUT"
+          echo 'Only readthedocs reads what this pull request changes; clad is not rebuilt.' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+        fi
+
+  # Pre-flight job to activate the cuda infrastructure
+  prepare-dell:
+    name: Activate self-host infrastructure
+    runs-on: [self-hosted, spotter]
+    steps:
+      - uses: compiler-research/ci-workflows/actions/wake-on-lan@main
+        with:
+          mac: a4:bb:6d:51:d5:d2
+          target-host: 192.168.100.30
+
+  build:
+    needs: rebuild-needed
+    # `!cancelled()` rather than the default: when the decision job itself
+    # fails, build. The alternative is a matrix that skips itself quietly.
+    if: ${{ !cancelled() && needs.rebuild-needed.outputs.value != 'false' }}
+    timeout-minutes: 600 # If some self-host machine is not available
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+
+        include:
+          # --- LINUX: Last 10 Runtimes (14-23) ---
+          # Ubuntu 24.04 throughout; the rows that still exercise 22.04
+          # are the cuda and kokkos ones further down.
+          - { name: ubu24-gcc13-runtime14, os: ubuntu-24.04, compiler: gcc-13, clang-runtime: '14' }
+          - { name: ubu24-clang15-runtime15, os: ubuntu-24.04, compiler: clang-15, clang-runtime: '15' }
+          - { name: ubu24-gcc14-runtime16, os: ubuntu-24.04, compiler: gcc-14, clang-runtime: '16' }
+          - { name: ubu24-clang16-runtime17, os: ubuntu-24.04, compiler: clang-16, clang-runtime: '17' }
+          - { name: ubu24-gcc14-runtime18, os: ubuntu-24.04, compiler: gcc-14, clang-runtime: '18' }
+          - { name: ubu24-clang17-runtime19, os: ubuntu-24.04, compiler: clang-17, clang-runtime: '19' }
+          - { name: ubu24-clang19-runtime20, os: ubuntu-24.04, compiler: clang-19, clang-runtime: '20', cuda: '12.6.3' }
+          - { name: ubu24-clang20-runtime21, os: ubuntu-24.04, compiler: clang-20, clang-runtime: '21', cuda: '12.8.1' }
+          - { name: ubu24-clang20-runtime22, os: ubuntu-24.04, compiler: clang-20, clang-runtime: '22', cuda: '13.0.3' }
+          # 23 comes from the published llvm-release cell, not from apt:
+          # apt-llvm.org carries no 23 packages, so flavor=system -- what
+          # every row above uses -- would have nothing to install.
+          # use-recipe selects the empty flavor, which is that cell.
+          - { name: ubu24-clang20-runtime23, os: ubuntu-24.04, compiler: clang-20, clang-runtime: '23', use-recipe: 'true' }
+          - { name: ubu24-clang22-runtime23-asan, os: ubuntu-24.04, compiler: clang-22, clang-runtime: '23', flavor: asan, extra_cmake_options: '-DLLVM_USE_SANITIZER=Address' }
+          # --- MACOS: Last 5 Runtimes (19-23) ---
+          # macOS ARM (standard) throughout; the oldest runtime runs on Intel
+          # for x86 sanity. brew has llvm@19 through llvm@22 but no llvm@23,
+          # so that row takes the published llvm-release cell instead. The
+          # Intel row stays on macos-15-intel because it needs no cell; the
+          # ones that are built are for macos-26-intel.
+          - { name: osx-intel-runtime19, os: macos-15-intel, compiler: clang, clang-runtime: '19' }
+          - { name: osx-arm-runtime20, os: macos-26, compiler: clang, clang-runtime: '20' }
+          - { name: osx-arm-runtime21, os: macos-26, compiler: clang, clang-runtime: '21' }
+          - { name: osx-arm-runtime22, os: macos-26, compiler: clang, clang-runtime: '22' }
+          - { name: osx-arm-runtime23, os: macos-26, compiler: clang, clang-runtime: '23', use-recipe: 'true' }
+
+          # --- WINDOWS: Last 5 Runtimes (19-23) ---
+          # These rows get their LLVM from conda-forge's clangdev rather than
+          # from a ci-workflows cell, so a major is available here as soon as
+          # that package is and the window costs nothing but matrix rows.
+          - { name: win-msvc-runtime19, os: windows-2022, compiler: msvc, clang-runtime: '19' }
+          - { name: win-msvc-runtime20, os: windows-2022, compiler: msvc, clang-runtime: '20' }
+          - { name: win-msvc-runtime21, os: windows-2022, compiler: msvc, clang-runtime: '21' }
+          - { name: win-msvc-runtime22, os: windows-2022, compiler: msvc, clang-runtime: '22' }
+          - { name: win-msvc-runtime23, os: windows-2022, compiler: msvc, clang-runtime: '23' }
+
+          # --- CUSTOM: Debug, coverage, benchmarks, static analysis ---
+          - name: ubu24-clang20-runtime22-debug
+            os: ubuntu-24.04
+            compiler: clang-20
+            clang-runtime: '22'
+            debug_build: true
+            flavor: debug
+
+          - name: ubu24-gcc13-runtime20-benchmarks
+            os: ubuntu-24.04
+            compiler: gcc-13
+            clang-runtime: '20'
+            extra_cmake_options: '-DCLAD_ENABLE_BENCHMARKS=On -DCLAD_ENABLE_ENZYME_BACKEND=On'
+            extra_packages: "libomp-20-dev libopenblas-dev"
+            benchmark: true
+
+          - name: ubu22-clang14-runtime14-cuda
+            os: ubuntu-22.04
+            compiler: clang-14
+            clang-runtime: '14'
+
+          - name: ubu24-clang16-runtime17-shared-libs
+            os: ubuntu-24.04
+            compiler: clang-16
+            extra_cmake_options: '-DBUILD_SHARED_LIBS=On'
+            clang-runtime: '17'
+
+          - name: ubu22-clang16-runtime22-kokkos
+            os: ubuntu-22.04
+            compiler: clang-16
+            clang-runtime: '22'
+            extra_packages: 'libtrilinos-kokkos-dev ninja-build'
+            extra_cmake_options: '-G Ninja'
+
+
+          # Valgrind over the binaries, not over clang. check-clad-execonly
+          # is where the execution tests are collected -- it re-runs the
+          # suite checking what the programs print rather than what the
+          # compiler did -- so it is what this row runs. Nothing here needs
+          # the from-source LLVM recipe, since clang is not the process being
+          # watched; the full run is build-valgrind, on push.
+          #
+          # The runtime matches the compiler so that libomp-20-dev, which the
+          # Linux setup installs for the runtime major, serves both: the
+          # OpenMP tests are the ones this row is most worth running, since
+          # what a parallel region does to memory is what nothing else here
+          # checks. Which LLVM builds the plugin does not matter to that.
+          - name: ubu24-clang20-runtime20-vg-exec
+            os: ubuntu-24.04
+            compiler: clang-20
+            extra_packages: 'valgrind'
+            extra_cmake_options: '-DCLAD_TEST_VG_EXEC_ONLY=On'
+            test_target: check-clad-execonly
+            clang-runtime: '20'
+
+          - name: ubu24-arm-clang16-runtime17-shared-libs
+            os: ubuntu-24.04-arm
+            compiler: clang-16
+            extra_cmake_options: '-DBUILD_SHARED_LIBS=On'
+            clang-runtime: '17'
+
+          - name: ubu24-arm-clang16-runtime22-kokkos
+            os: ubuntu-24.04-arm
+            compiler: clang-16
+            clang-runtime: '22'
+            extra_packages: 'libtrilinos-kokkos-dev ninja-build'
+            extra_cmake_options: '-G Ninja'
+
+          - name: ubu24-arm-clang16-runtime18
+            os: ubuntu-24.04-arm
+            compiler: clang-16
+            clang-runtime: '18'
+
+    steps: &build_steps
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: 3.11
+    - name: Setup default Build Type on *nux
+      if: ${{ (matrix.debug_build != true) && (runner.os != 'windows') }}
+      run: |
+        echo "BUILD_TYPE=Release" >> $GITHUB_ENV
+        echo "CLAD_CODE_COVERAGE=0" >> $GITHUB_ENV
+    - name: Setup default Build Type on *nux (build_debug & asserts)
+      if: ${{ (matrix.debug_build == true) && (runner.os != 'windows') }}
+      run: |
+        echo "BUILD_TYPE=Debug" >> $GITHUB_ENV
+        # Cleanup some space: https://github.com/orgs/community/discussions/25678
+        # Under nektos/act this path is a bind-mount, so the mountpoint itself
+        # cannot be removed ("Device or resource busy"); tolerate that so the
+        # debug row is reproducible locally.
+        rm -fr /opt/hostedtoolcache || true
+    - name: Setup default Build Type on Windows
+      if: runner.os == 'windows'
+      run: |
+        $env:BUILD_TYPE="Release"
+        $env:CLAD_CODE_COVERAGE="0"
+        echo "BUILD_TYPE=Release" >> $env:GITHUB_ENV
+        echo "CLAD_CODE_COVERAGE=0" >> $env:GITHUB_ENV
+    - name: Compute ncpus (cgroup-aware)
+      if: runner.os != 'windows'
+      run: |
+        if [[ "${{ runner.os }}" == "macOS" ]]; then
+          ncpus=$(sysctl -n hw.ncpu)
+        else
+          ncpus=$(nproc)
+          if [[ -r /sys/fs/cgroup/cpu.max ]]; then
+            read -r quota period < /sys/fs/cgroup/cpu.max || true
+            if [[ "${quota:-max}" != "max" && "${period:-0}" -gt 0 ]]; then
+              capped=$(( (quota + period - 1) / period ))
+              if [[ "$capped" -ge 1 && "$capped" -lt "$ncpus" ]]; then
+                ncpus="$capped"
+              fi
+            fi
+          fi
+        fi
+        echo "ncpus=$ncpus" >> $GITHUB_ENV
+    - name: Setup LLVM ${{ matrix.clang-runtime }}${{ matrix.flavor && format(' [{0}]', matrix.flavor) || '' }}
+      if: runner.os != 'Windows'
+      uses: compiler-research/ci-workflows/actions/setup-llvm@main
+      with:
+        version: ${{ matrix.clang-runtime }}
+        os:      ${{ matrix.self-hosted-os || matrix.os }}
+        # use-recipe=true selects setup-llvm's empty flavor (the vanilla
+        # from-source llvm-release recipe); the `|| 'system'` default cannot
+        # emit that empty string on its own.
+        flavor:  ${{ matrix.use-recipe != 'true' && (matrix.flavor || 'system') || '' }}
+
+    - name: Install extra Linux deps
+      if: runner.os == 'Linux'
+      run: |
+        # cmake is preinstalled on github-hosted ubuntu-24.04 but absent
+        # from catthehacker/ubuntu:act-24.04; install it so bin/repro works.
+        # The debug row needs it too (to build clad), so this step must not
+        # be gated on debug_build.
+        #
+        # Install against the image's package lists and refresh them only if
+        # that fails. They go stale just when the archive supersedes a
+        # dependency and drops the old .deb -- valgrind pulls libc6-dbg,
+        # whose 2.39-0ubuntu8.7 build stopped being fetchable -- so an
+        # unconditional update would cost every Linux row on every run to
+        # cover a rare event. Same shape as the clang install below.
+        apt_install() {
+          sudo apt-get install -y "$@" \
+            || { sudo apt-get update && sudo apt-get install -y "$@"; }
+        }
+        apt_install cmake ${{ matrix.extra_packages }}
+        # libomp-N-dev: best-effort. apt-llvm.org lags on the latest
+        # major; recipe-flavor rows get libomp from the recipe build,
+        # not apt. Ask apt for it rather than asking `apt-cache show`
+        # first, whose answer is no on a runner whose package lists do
+        # not carry the major yet -- which is how the coverage row came
+        # to install no libomp and report every OpenMP test unsupported.
+        # When the package really is missing, the tests skip via REQUIRES.
+        omp="libomp-${{ matrix.clang-runtime }}-dev"
+        apt_install "$omp" \
+          || echo "::notice::$omp unavailable; OpenMP tests will skip"
+
+    - name: Setup compiler on Linux
+      if: runner.os == 'Linux'
+      run: |
+        # https://www.gnu.org/software/bash/manual/html_node/Shell-Parameter-Expansion.html
+        vers="${compiler#*-}"
+        os_codename="`cat /etc/os-release | grep UBUNTU_CODENAME | cut -d = -f 2`"
+        sudo apt update
+        if [[ "${{ matrix.compiler }}" == *"gcc"* ]]; then
+          sudo apt install -y gcc-${vers} g++-${vers}
+          echo "CC=gcc-${vers}" >> $GITHUB_ENV
+          echo "CXX=g++-${vers}" >> $GITHUB_ENV
+        else
+          if ! sudo apt install -y clang-${vers}; then
+            curl https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+            echo "deb https://apt.llvm.org/${os_codename}/ llvm-toolchain-${os_codename}-${vers} main" | sudo tee -a /etc/apt/sources.list
+            sudo apt update
+            sudo apt install -y clang-${vers}
+          fi
+          echo "CC=clang-${vers}" >> $GITHUB_ENV
+          echo "CXX=clang++-${vers}" >> $GITHUB_ENV
+        fi
+      env:
+        compiler: ${{ matrix.compiler }}
+    - name: Setup compiler on macOS
+      if: runner.os == 'macOS'
+      run: |
+        if [[ "${{ matrix.compiler }}" == *"clang"* ]]; then
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+        else
+          echo "Unsupported compiler - fix YAML file"
+        fi
+    - name: Setup compiler on Windows
+      if: runner.os == 'windows'
+      run: |
+        if ( "${{ matrix.compiler }}" -imatch "clang" )
+        {
+          $ver="${{ matrix.compiler }}".split("-")[1]
+          choco install llvm --version=$ver --no-progress -my
+          $env:PATH_TO_LLVM_BUILD="$env:ProgramFiles\LLVM"
+          echo "PATH_TO_LLVM_BUILD=$env:PATH_TO_LLVM_BUILD"
+          echo "PATH_TO_LLVM_BUILD=$env:PATH_TO_LLVM_BUILD" >> $env:GITHUB_ENV
+          clang --version
+          #
+          $env:CC="clang"
+          $env:CXX="clang++"
+          echo "CC=clang" >> $env:GITHUB_ENV
+          echo "CXX=clang++" >> $env:GITHUB_ENV
+        }
+        elseif ( "${{ matrix.compiler }}" -imatch "msvc" )
+        {
+          # MSVC is builtin in container image
+        }
+        else
+        {
+          echo "Unsupported compiler - fix YAML file"
+        }
+
+    - name: Setup LLVM extras on macOS
+      if: runner.os == 'macOS'
+      run: |
+        # setup-llvm always lands the install at $GITHUB_WORKSPACE/install,
+        # whichever flavor ran: the Homebrew path symlinks the brew prefix
+        # there, the recipe flavors put a real install tree there. Reading
+        # the brew prefix directly only worked for the former.
+        #
+        # The SDK headers still have to be copied into /usr/local/include/
+        # (ln fails on macOS-arm runners), which is what this step is for.
+        PATH_TO_LLVM_BUILD="$GITHUB_WORKSPACE/install"
+        pip3 install lit
+        sudo cp -r -n $(xcrun --show-sdk-path)/usr/include/ /usr/local/include/
+        echo "PATH_TO_LLVM_BUILD=$PATH_TO_LLVM_BUILD" >> $GITHUB_ENV
+
+    - name: Setup LLVM/Clang on Linux
+      if: ${{ runner.os == 'Linux' }}
+      run: |
+        # setup-llvm always lands the install at $GITHUB_WORKSPACE/install
+        # (a symlink to /usr/lib/llvm-N for flavor=system, a real install
+        # tree for the recipe flavors). Point clad's build prefix there so
+        # the cmake configs and their .a references resolve regardless of
+        # flavor.
+        PATH_TO_LLVM_BUILD="$GITHUB_WORKSPACE/install"
+        pip3 install lit # LLVM lit is not part of the llvm releases...
+        echo "PATH_TO_LLVM_BUILD=$PATH_TO_LLVM_BUILD" >> $GITHUB_ENV
+    - name: Setup LLVM/Clang on Windows
+      if: ${{ runner.os == 'windows' }}
+      run: |
+        C:\Miniconda\condabin\conda.bat install -y -c conda-forge "clangdev=${{ matrix.clang-runtime }}"
+        $env:PATH_TO_LLVM_BUILD="$env:CONDA\Library"
+        pip3 install lit # LLVM lit is not part of the llvm releases...
+        echo "Runtime LLVM/Clang: $env:PATH_TO_LLVM_BUILD"
+        echo "PATH_TO_LLVM_BUILD=$env:PATH_TO_LLVM_BUILD"
+        echo "PATH_TO_LLVM_BUILD=$env:PATH_TO_LLVM_BUILD" >> $env:GITHUB_ENV
+    # Headers only: enough to compile a .cu, which is all a runner with no
+    # GPU can do. The self-hosted rows bring their own toolkit and run the
+    # tests for real, so they are left alone.
+    - name: Setup CUDA headers
+      if: ${{ matrix.cuda && !contains(matrix.os, 'self-hosted') }}
+      uses: compiler-research/ci-workflows/actions/setup-cuda@main
+      with:
+        version: ${{ matrix.cuda }}
+        os: ${{ matrix.os }}
+        arch: x86_64
+    - name: Setup code coverage
+      if: ${{ (matrix.coverage == true) }}
+      run: |
+        sudo apt install -y lcov
+        # Workaround ubuntu lcov-1.15-1 package bug
+        if sudo apt list lcov --installed | grep "1.15-1" ; then
+          wget https://launchpad.net/ubuntu/+source/lcov/1.15-2/+build/23784466/+files/lcov_1.15-2_all.deb
+          sudo apt install -y ./lcov_1.15-2_all.deb
+        fi
+        echo "CLAD_CODE_COVERAGE=1" >> $GITHUB_ENV
+        echo "BUILD_TYPE=Debug" >> $GITHUB_ENV
+    - name: Display config *nix
+      if: ${{ runner.os != 'windows' }}
+      run: |
+        cmake --version
+        $CC --version
+        $CXX --version
+        xz --version
+        tar --version
+        echo "Use Clang/LLVM in $PATH_TO_LLVM_BUILD"
+        echo "Building clad in `[[ -z "$BUILD_TYPE" ]] && echo RelWithDebInfo || echo $BUILD_TYPE`"
+        python3 --version
+    - name: Display config Windows
+      if: ${{ runner.os == 'windows' }}
+      run: |
+        cmake --version
+        echo "CC=$env:CC"
+        if ( "$env:CC" -ne "" )
+        {
+          Start-Process -Wait -FilePath "$env:CC" -Verb RunAs -ArgumentList '--version'
+        }
+        echo "CXX=$env:CXX"
+        if ( "$env:CXX" -ne "" )
+        {
+          Start-Process -Wait -FilePath "$env:CXX" -Verb RunAs -ArgumentList '--version'
+        }
+        xz --version
+        tar --version
+        echo "Use Clang/LLVM in $env:PATH_TO_LLVM_BUILD"
+        echo "Building clad in $env:BUILD_TYPE"
+        python3 --version
+    # Build the baseline first, so the touched tests can be run against a
+    # clad that does not have the change. Restoring the hunks afterwards
+    # rebuilds only what they touch, so this costs one incremental build
+    # rather than a second full one.
+    - name: Revert functional hunks for the baseline
+      if: ${{ runner.os != 'windows' && github.event_name == 'pull_request' }}
+      uses: ./.github/actions/observes-change
+      with:
+        mode: revert
+    # Clad is built twice on a pull request -- once with the functional hunks
+    # reverted, to show the touched tests failing, and once as written. What
+    # the second build reuses from the first depends on what the change
+    # touches: a .cpp leaves the other translation units alone, a header most
+    # of them include leaves almost nothing. So this pays on some pull
+    # requests and not on others, and the stats below are how to tell which.
+    #
+    # Not on Windows: ccache drives MSVC only with debug information inlined
+    # into the objects, which is not how that job is configured.
+    - name: Restore the compiler cache
+      if: ${{ runner.os != 'windows' }}
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ccache-${{ matrix.name }}-${{ github.run_id }}
+        restore-keys: |
+          ccache-${{ matrix.name }}-
+
+    - name: Set up ccache
+      if: ${{ runner.os != 'windows' }}
+      run: |
+        command -v ccache >/dev/null || {
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install -q ccache
+          else sudo apt-get install -y -qq ccache; fi
+        }
+        # Exported here as well as written to the environment file: the file
+        # only reaches later steps, and the two commands below are now.
+        export CCACHE_DIR="$HOME/.ccache"
+        echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+        # Bounded, because every job keeps one and they share a ten gigabyte
+        # allowance with each other and with the 32-bit job's packages. Past
+        # the bound ccache evicts its own oldest rather than letting the cache
+        # grow until GitHub evicts something that matters.
+        ccache --max-size=250M
+        ccache --zero-stats
+
+    - name: Build Clad on *nix
+      if: ${{ runner.os != 'windows' }}
+      run: |
+        rm -rf obj && mkdir obj && cd obj
+        cmake -DClang_DIR=${{ env.PATH_TO_LLVM_BUILD }}  \
+          -DLLVM_DIR=${{ env.PATH_TO_LLVM_BUILD }}       \
+          -DCMAKE_BUILD_TYPE=$([[ -z "$BUILD_TYPE" ]] && echo RelWithDebInfo || echo $BUILD_TYPE) \
+          -DCLAD_CODE_COVERAGE=${{ env.CLAD_CODE_COVERAGE }}   \
+          -DLLVM_EXTERNAL_LIT="`which lit`" \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache   \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DLLVM_ENABLE_WERROR=On           \
+          $GITHUB_WORKSPACE                 \
+          ${{ matrix.extra_cmake_options }}
+
+        cmake --build . -- -j${{ env.ncpus }}
+    - name: Check the touched tests against the baseline
+      if: ${{ always() && runner.os != 'windows' && env.observes_check == '1' }}
+      uses: ./.github/actions/observes-change
+      with:
+        mode: check
+        platform: ${{ matrix.name }}
+        build-dir: obj
+        rebuild-command: cmake --build obj -- -j${{ env.ncpus }}
+    - name: Report the compiler cache
+      if: ${{ !cancelled() && runner.os != 'windows' }}
+      # Reports whether the build succeeded or failed, so a job that broke
+      # before ccache was installed says that rather than adding an unrelated
+      # "command not found" on top of it. Not always(): a cancelled run has
+      # nothing to say and should stop.
+      run: |
+        command -v ccache >/dev/null || { echo "ccache was never installed"; exit 0; }
+        ccache --show-stats --verbose || ccache --show-stats
+
+    - name: Upload the baseline verdict
+      if: ${{ runner.os != 'windows' && env.observes_check == '1' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: observes-change-${{ matrix.name }}
+        path: observes/
+    - name: Build Clad on Windows
+      if: ${{ runner.os == 'windows' }}
+      run: |
+        mkdir obj
+        cd obj
+        if ( "$env:BUILD_TYPE" -eq "" )
+        {
+          $env:BUILD_TYPE="RelWithDebInfo"
+        }
+        if ( "$env:CLAD_CODE_COVERAGE" -eq "" )
+        {
+          $env:CLAD_CODE_COVERAGE="0"
+        }
+        ((Get-Content -path C:/Miniconda/Library/lib/cmake/llvm/LLVMConfig.cmake -Raw) -replace 'LLVM_ENABLE_DIA_SDK ON','LLVM_ENABLE_DIA_SDK OFF') | Set-Content -Path C:/Miniconda/Library/lib/cmake/llvm/LLVMConfig.cmake
+        $lit = @(which lit)
+        # Clang_DIR and LLVM_DIR name config files; CMAKE_PREFIX_PATH names the
+        # conda prefix itself, which is what find_package needs to resolve the
+        # dependencies LLVM's exports mention. LLVMSupport lists ZLIB::ZLIB in
+        # its link interface, and that target only exists once ZLIB is found.
+        cmake -DCMAKE_PREFIX_PATH="$env:PATH_TO_LLVM_BUILD" -DClang_DIR="$env:PATH_TO_LLVM_BUILD" -DLLVM_DIR="$env:PATH_TO_LLVM_BUILD" -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" -DCLAD_CODE_COVERAGE="$env:CLAD_CODE_COVERAGE" -DCLAD_BUILD_STATIC_ONLY="ON" -DLLVM_EXTERNAL_LIT="$lit" "$env:GITHUB_WORKSPACE" ${{ matrix.extra_cmake_options }}
+        cmake --build . --config Release
+    - name: Test Clad on *nix
+      if: ${{ runner.os != 'windows' }}
+      env:
+        # lit reads LIT_OPTS at startup; without it, lit defaults to
+        # multiprocessing.cpu_count() which sees the host count and
+        # ignores cgroup CFS quotas, over-provisioning workers on
+        # constrained containers (cf. the LLVM build step's cap).
+        LIT_OPTS: -j${{ env.ncpus }}
+      run: |
+        cd obj
+        # Packages downloaded and unzipped require setting the SDKROOT.
+        if [[ "runner.os" == "macOS" ]]; then
+          export SDKROOT=`xcrun --show-sdk-path`
+        fi
+        cmake --build . --target ${{ matrix.test_target || 'check-clad' }} -- -j${{ env.ncpus }}
+    - name: Test Clad on Windows
+      if: ${{ runner.os == 'windows' }}
+      run: |
+        cd obj
+        #cmake --build . --target check-clad
+    - name: Benchmark Clad
+      if: ${{ matrix.benchmark }}
+      run: |
+        baseline_hash=$([[ -z "${{ github.event.pull_request }}" ]] && echo ${{ github.event.before }} || echo ${{ github.event.pull_request.base.sha }})
+        current_hash=${{ github.sha }}
+        cd benchmark
+        python3 benchmark_compare.py ${baseline_hash} ${current_hash} obj
+        cd ..
+    - name: Show reproduce-locally hint
+      if: ${{ failure() }}
+      shell: bash
+      env:
+        REPO: ${{ github.repository }}
+        REPO_NAME: ${{ github.event.repository.name }}
+        SHA: ${{ github.sha }}
+        ROW: ${{ matrix.name }}
+      run: |
+        echo "::group::Reproduce this failure locally (requires Docker + nektos/act)"
+        cat <<EOF
+            git clone https://github.com/compiler-research/ci-workflows.git
+            git clone https://github.com/$REPO.git
+            cd $REPO_NAME
+            git checkout $SHA
+            ../ci-workflows/bin/repro $ROW
+        EOF
+        echo "::endgroup::"
+    - name: Failed job config
+      if: ${{ failure() && runner.debug && runner.os != 'windows' }}
+      env:
+        GITHUB_CONTEXT: ${{ toJson(github) }}
+      run: |
+        echo "$GITHUB_CONTEXT"
+        export
+        if [[ "runner.os" == "Linux" ]]; then
+          apt-mark showhold
+          dpkg-query -L libclang-${{ matrix.clang-runtime }}-dev
+          dpkg-query -L clang-${{ matrix.clang-runtime }}
+          dpkg-query -L llvm-${{ matrix.clang-runtime }}-dev
+          find /usr/lib/llvm-${{ matrix.clang-runtime }}/
+        fi
+        if [[ "runner.os" == "macOS" ]]; then
+          brew search llvm
+          find /usr/local/opt/llvm@*/
+        fi
+        pip show lit
+        cat obj/CMakeCache.txt
+        cat obj/CMakeFiles/*.log
+    - name: Setup tmate session
+      if: ${{ !cancelled() && runner.debug }}
+      uses: mxschmitt/action-tmate@v3
+      # When debugging increase to a suitable value!
+      timeout-minutes: 30
+    - name: Prepare code coverage report
+      if: ${{ success() && (matrix.coverage == true) }}
+      run: |
+        # Create lcov report
+        # capture coverage info
+        vers="${CC#*-}"
+        lcov --directory . --capture --output-file coverage.info --gcov-tool /usr/bin/gcov-${vers} --ignore-errors gcov
+        # filter out system and extra files.
+        # To also not include test code in coverage add them with full path to the patterns: '*/tests/*'
+        lcov --remove coverage.info '/usr/*' "${HOME}"'/.cache/*' \
+          "$GITHUB_WORKSPACE"'/test/*' "$GITHUB_WORKSPACE"'/unittests/*' \
+          --output-file coverage.info
+        # output coverage data for debugging (optional)
+        lcov --list coverage.info
+
+    - name: Upload to codecov.io
+      if: ${{ success() && (matrix.coverage == true) }}
+      uses: codecov/codecov-action@v5
+      with:
+        files: ./coverage.info
+        fail_ci_if_error: true
+        verbose: true
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Self-hosted CUDA rows. Separate job so `prepare-dell` gates only
+  # what depends on the dell; the hosted-runner matrix in `build` runs
+  # without waiting. Step list shared via the &build_steps anchor.
+  build-selfhost:
+    needs: prepare-dell
+    timeout-minutes: 600 # If the dell is slow to come back up.
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: selfh-ubu22-gcc12-runtime19-analyzers
+            os: [self-hosted, cuda, heavy]
+            self-hosted-os: ubuntu-22.04
+            compiler: gcc-12
+            clang-runtime: '19'
+            coverage: true
+            cuda: true
+            extra_cmake_options: '-DCLAD_ENABLE_ENZYME_BACKEND=On -DCLAD_CUDA_TEST_USE_SANITIZER=On'
+            extra_packages: ' libzstd-dev '
+
+          - name: selfh-ubu22-clang16-runtime18-cuda
+            os: [self-hosted, cuda, heavy]
+            self-hosted-os: ubuntu-22.04
+            compiler: clang-16
+            extra_cmake_options: '-DCLAD_CUDA_TEST_USE_SANITIZER=On'
+            clang-runtime: '18'
+            cuda: true
+
+    steps: *build_steps
+
+  # Valgrind is the row a pull request would otherwise wait on -- two hours
+  # against 8 for an ordinary row -- and it answers a question about master
+  # rather than about the change under review. Step list shared via the
+  # &build_steps anchor.
+  build-valgrind:
+    if: ${{ github.event_name == 'push'
+        || contains(github.event.pull_request.labels.*.name,
+                    'run-post-merge') }}
+    timeout-minutes: 360 # Valgrind takes about two hours.
+    # A literal rather than ${{ matrix.name }}: this job is skipped on a pull
+    # request that does not ask for it, and a skipped job's name is resolved
+    # before the matrix expands, so the expression form reports as a check
+    # called `matrix.name`. Holds while the matrix has the one row below.
+    name: ubu24-clang20-runtime22-vg
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubu24-clang20-runtime22-vg
+            os: ubuntu-24.04
+            compiler: clang-20
+            extra_packages: 'valgrind'
+            extra_cmake_options: '-DCLAD_TEST_USE_VG=On'
+            clang-runtime: '22'
+            # Run Valgrind against the from-source llvm-release recipe
+            # (Release+Asserts), not apt: apt's -O2 binaries read uninitialised
+            # bitfield padding in ~399 clang/LLVM sites (llvm/llvm-project#194147)
+            # that no surgical suppression can cover. The recipe build tops out
+            # in two frames, handled by test/clad-valgrind-llvm22.supp.
+            use-recipe: 'true'
+    steps: *build_steps
+
+  # ROOT ships clad linked into cling, where it runs under an interpreter
+  # rather than a compiler. This job builds that pairing and runs the tests
+  # that need it. Like Valgrind it waits for the merge: building cling costs a
+  # pull request more time than the check is worth.
+  build-cling:
+    if: ${{ github.event_name == 'push'
+        || contains(github.event.pull_request.labels.*.name,
+                    'run-post-merge') }}
+    timeout-minutes: 120
+    # A literal rather than ${{ matrix.name }}: this job is skipped on a pull
+    # request that does not ask for it, and a skipped job's name is resolved
+    # before the matrix expands, so the expression form reports as a check
+    # called `matrix.name`. Holds while the matrix has the one row below.
+    name: ubu24-cling-llvm22
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - name: ubu24-cling-llvm22
+            os: ubuntu-24.04
+            clang-runtime: '22'
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: 3.11
+    - name: Install the build and test tools
+      run: |
+        # cmake and ninja are preinstalled on github-hosted runners but not in
+        # the image bin/repro uses, and cling needs libedit. The LLVM install
+        # below has no FileCheck.
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build libedit-dev llvm-18-tools
+        pip3 install lit
+    - name: Setup LLVM ${{ matrix.clang-runtime }} and cling
+      uses: compiler-research/ci-workflows/actions/setup-llvm@main
+      with:
+        version: ${{ matrix.clang-runtime }}
+        os: ${{ matrix.os }}
+        flavor: cling
+        flavor-version: cling-llvm${{ matrix.clang-runtime }}
+    - name: Link clad into cling as ROOT does
+      run: |
+        # ROOT builds clad without its plugin library and links both archives
+        # whole into cling (core/metacling/src/CMakeLists.txt).
+        cmake -S . -B obj -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_DIR="$LLVM_DIR" -DClang_DIR="$Clang_DIR" \
+          -DCLAD_BUILD_STATIC_ONLY=ON
+        # clad-tblgen too, though ROOT does not need it: this row takes the
+        # llvm-root recipe, so it is the only one with no libLLVM to fall back
+        # on, and the only one where a library named after the one that needs
+        # it fails to link. Naming just the two archives is what let that reach
+        # ROOT.
+        cmake --build obj --target cladPlugin cladDifferentiator clad-tblgen
+        # setup-llvm leaves its cling build tree in cling/build; relinking
+        # it is all that is left to do.
+        cmake cling/build "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--whole-archive \
+          $PWD/obj/lib/libcladPlugin.a $PWD/obj/lib/libcladDifferentiator.a \
+          -Wl,--no-whole-archive"
+        cmake --build cling/build --target cling
+        cmake --install cling/build
+    - name: Run the tests that need cling
+      run: |
+        # clad's lit configuration looks for the plugin library, so build it
+        # too; only the plugin's own files compile again.
+        cmake obj -DCLAD_BUILD_STATIC_ONLY=OFF -DLLVM_EXTERNAL_LIT="$(which lit)"
+        cmake --build obj --target clad
+        # lit takes FileCheck from the LLVM install, which has none.
+        ln -s /usr/lib/llvm-18/bin/FileCheck install/bin/FileCheck
+        lit -v --param cling="$PWD/install/bin/cling" obj/test/Misc/Cling.cpp
+
+  # A post-merge gate nobody watches is not a gate: the run ends long after
+  # its author has moved on. Consecutive failures comment on the open report
+  # rather than file another, so a week of red master is one thread.
+  # Every row above is handed an LLVM installation, where LLVM_INCLUDE_DIRS
+  # holds one directory, LLVM_LIBRARY_DIR holds the libraries, and
+  # CMAKE_SOURCE_DIR and CMAKE_BINARY_DIR are clad's own. None of that is true
+  # for the two consumers below, so a build rule that relies on any of it
+  # passes the whole matrix and breaks them. The two rows here are the only
+  # ones that can say otherwise, and they wait for a change to the files that
+  # decide how clad is built.
+  #
+  # Neither is a Windows row, though ROOT met the second failure there: both
+  # differences are in what LLVMConfig says, and a generator says it on every
+  # platform. What stays uncovered is MSVC and a build tree together, which
+  # only ROOT builds.
+
+  # clad inside LLVM, which is what the compiler-explorer image builds
+  # (compiler-explorer/misc-builder, clad/build.sh) -- against this checkout
+  # rather than against master, which is the part that script cannot do.
+  # LLVMConfig is never read here, so the variables it sets are empty.
+  #
+  # LLVM is compiled again rather than installed, because an installed one
+  # cannot be built in tree. It is not paid for again: ci-workflows publishes
+  # the objects of that build next to the install, and fetch-ccache reads them.
+  build-in-tree:
+    needs: [rebuild-needed]
+    if: ${{ needs.rebuild-needed.outputs.build_system == 'true'
+        || contains(github.event.pull_request.labels.*.name,
+                    'run-post-merge') }}
+    timeout-minutes: 120
+    name: ubu24-intree-llvm22
+    runs-on: ubuntu-24.04
+    steps:
+    # At the workspace root, not under a path: of its own. bin/repro
+    # --ci-workflows stages the actions under .github/ and act resolves them
+    # from the root, so a checkout that moves .github out of the root cannot
+    # be reproduced locally.
+    - uses: actions/checkout@v7
+    - name: Install the build tools
+      run: sudo apt-get update && sudo apt-get install -y -qq cmake ninja-build ccache
+    # ccache before setup-llvm: fetch-ccache restores nothing without it.
+    #
+    # The objects for this LLVM are published beside the install tree, so most
+    # of the rebuild below is read rather than compiled. How much depends on
+    # how far this configure is from the one that produced them -- an entry is
+    # keyed on the compile command, and these flags are not the recipe's. The
+    # two that are not negotiable are the source commit and its path relative
+    # to the workspace; get either wrong and nothing hits at all.
+    - name: Setup LLVM and the objects it was built from
+      id: llvm
+      uses: compiler-research/ci-workflows/actions/setup-llvm@main
+      with:
+        version: '22'
+        os: ubuntu-24.04
+        arch: x86_64
+        fetch-ccache: 'true'
+    # The commit the objects came from, not a tag of our choosing: ccache keys
+    # on preprocessed output, so another commit is another cache.
+    - name: Clone that LLVM where the recipe cloned it
+      env:
+        SRC: ${{ steps.llvm.outputs.src-commit }}
+      run: |
+        set -euo pipefail
+        # Refuse an empty answer rather than fetch whatever the remote points
+        # at. git treats no ref as the default branch, so this row quietly
+        # built LLVM's main once: the objects then matched nothing, and clad
+        # was compiled against an LLVM no other row covers.
+        if [ -z "${SRC:-}" ]; then
+          echo "::error::setup-llvm reported no src-commit; without it there is" \
+               "nothing to match the restored objects to."
+          exit 1
+        fi
+        dir="$GITHUB_WORKSPACE/_recipe_work/llvm-project"
+        git init -q "$dir"
+        git -C "$dir" remote add origin https://github.com/llvm/llvm-project.git
+        git -C "$dir" fetch -q --depth 1 origin "$SRC"
+        git -C "$dir" checkout -q FETCH_HEAD
+        echo "building LLVM $SRC, the commit the restored objects came from"
+    - name: Build clad as part of LLVM
+      run: |
+        # What the compiler-explorer image builds, against this checkout.
+        cmake -S "$GITHUB_WORKSPACE/_recipe_work/llvm-project/llvm" \
+          -B "$GITHUB_WORKSPACE/_recipe_work/llvm-project/build" -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_ENABLE_PROJECTS=clang \
+          -DLLVM_EXTERNAL_PROJECTS=clad \
+          -DLLVM_EXTERNAL_CLAD_SOURCE_DIR="$GITHUB_WORKSPACE" \
+          -DLLVM_TARGETS_TO_BUILD=host \
+          -DCLAD_DISABLE_TESTS=ON \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        cmake --build "$GITHUB_WORKSPACE/_recipe_work/llvm-project/build" \
+          --target clad
+    # A miss is silent: the row still passes, only slowly. Say what happened
+    # so a configure that stops matching the producer is visible.
+    - name: Report what the cache did
+      if: always()
+      run: ccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # clad standalone against an LLVM build tree with a multi-config generator,
+  # which is what ROOT builds on Windows. A multi-config LLVMConfig hands out
+  #
+  #   set(LLVM_LIBRARY_DIR ".../<build>/${CONFIGURATION}/lib")
+  #
+  # with ${CONFIGURATION} unexpanded, and nothing defines it in clad's scope,
+  # so anything that looks a library up under that hint finds nothing. Nothing
+  # about it is MSVC's: Ninja Multi-Config reproduces it here, which is why
+  # this row is Linux and takes minutes.
+  #
+  # LLVM is configured but only the two libraries clad-tblgen links are built.
+  # LLVMConfig is written at configure time and is all clad reads, so the
+  # failure this row exists for needs no LLVM build at all; the two libraries
+  # are there to link the tool and render a table, which is the other thing a
+  # build tree has broken before.
+  build-multiconfig:
+    needs: [rebuild-needed]
+    if: ${{ needs.rebuild-needed.outputs.build_system == 'true'
+        || contains(github.event.pull_request.labels.*.name,
+                    'run-post-merge') }}
+    timeout-minutes: 60
+    name: ubu24-multiconfig-llvm21
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+    # cmake as well as ninja: both are preinstalled on a github-hosted runner
+    # and neither is in the image bin/repro uses, and a row that cannot be run
+    # locally is a row whose failures have to be read rather than reproduced.
+    - name: Install the build tools
+      run: sudo apt-get update && sudo apt-get install -y -qq cmake ninja-build
+    - name: Clone LLVM
+      run: |
+        git clone --depth 1 -b llvmorg-21.1.0 \
+          https://github.com/llvm/llvm-project.git llvm-project
+    - name: Configure LLVM with a multi-config generator
+      run: |
+        cmake -S llvm-project/llvm -B llvm-build -G "Ninja Multi-Config" \
+          -DLLVM_ENABLE_PROJECTS=clang \
+          -DLLVM_TARGETS_TO_BUILD=host
+    - name: Build what clad-tblgen links
+      run: |
+        cmake --build llvm-build --config Release \
+          --target LLVMTableGen LLVMSupport
+    - name: Configure clad against the build tree
+      run: |
+        cmake -S . -B clad-build -G "Ninja Multi-Config" \
+          -DLLVM_DIR="$PWD/llvm-build/lib/cmake/llvm" \
+          -DClang_DIR="$PWD/llvm-build/lib/cmake/clang" \
+          -DCLAD_DISABLE_TESTS=ON
+    - name: Render the tables and link the tool that renders them
+      run: |
+        cmake --build clad-build --config Release \
+          --target clad-tblgen clad-tables
+
+  post-merge-report:
+    needs: [build-valgrind, build-cling]
+    # Only after a merge, even though the gates above now also run on a
+    # labelled pull request: this reports against head_commit, which a pull
+    # request event does not carry, and the author of a branch watching its
+    # own run needs no issue filed at them.
+    if: ${{ failure() && github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+    - name: File the failure against the commit that caused it
+      uses: actions/github-script@v9
+      with:
+        script: |
+          // A row of its own for each gate, so that a red Valgrind and a red
+          // cling are two threads rather than one confusing one. Reporting
+          // is per label from here on; a job that ran and passed is skipped.
+          const gates = [
+            { label: 'valgrind', what: 'Valgrind',
+              result: '${{ needs.build-valgrind.result }}' },
+            { label: 'cling', what: 'Clad inside cling',
+              result: '${{ needs.build-cling.result }}' },
+          ];
+          const repo = { owner: context.repo.owner, repo: context.repo.repo };
+          const commit = context.payload.head_commit || {};
+          const author = (commit.author || {});
+          // GitHub resolves the commit email to an account when it can; fall
+          // back to the name so the report still says whose commit it was.
+          const who = author.username ? `@${author.username}`
+                                      : (author.name || 'unknown author');
+          const run = `${context.serverUrl}/${context.repo.owner}/`
+                    + `${context.repo.repo}/actions/runs/${context.runId}`;
+          for (const gate of gates) {
+            if (gate.result !== 'failure')
+              continue;
+            const body = [
+              `${gate.what} failed on master. It runs after the merge, so the`,
+              'pull request that introduced this never saw it.',
+              '',
+              `- commit: ${context.sha} -- ${(commit.message || '').split('\n')[0]}`,
+              `- author: ${who}`,
+              `- run: ${run}`,
+            ].join('\n');
+            // The label is what carries the thread from one failure to the
+            // next, so it has to exist before anything is filed under it.
+            await github.rest.issues.getLabel({ ...repo, name: gate.label })
+              .catch(() => github.rest.issues.createLabel({
+                ...repo, name: gate.label, color: 'b60205',
+                description: `Post-merge ${gate.what} failure` }));
+            // listForRepo answers with pull requests too; only an issue is a
+            // report, and a labelled pull request must not swallow one.
+            const open = await github.rest.issues.listForRepo(
+              { ...repo, state: 'open', labels: gate.label });
+            const report = open.data.find(i => !i.pull_request);
+            if (report)
+              await github.rest.issues.createComment(
+                { ...repo, issue_number: report.number, body });
+            else
+              await github.rest.issues.create({
+                ...repo, body, labels: [gate.label],
+                title: `[${gate.label}] master fails at ${context.sha.slice(0, 8)}`,
+              });
+          }
+
+  observes-change:
+    name: Tests observe the change
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    # The self-hosted rows are the only ones with a GPU, so a CUDA test is
+    # measured nowhere else. Waiting for them costs the dell's wake-up time;
+    # when it never comes they simply report nothing.
+    needs: [build, build-selfhost]
+    runs-on: ubuntu-24.04
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/download-artifact@v8
+      with:
+        pattern: observes-change-*
+        path: verdicts
+        merge-multiple: false
+      continue-on-error: true
+    - name: Decide
+      uses: ./.github/actions/observes-change
+      with:
+        mode: verdict
+        verdict-dir: verdicts
+    # Keep the per-platform matrix even when the check passes: a test that
+    # is never the only one to fail across many changes is a candidate for
+    # merging, which is a claim about defects caught rather than lines run.
+    - name: Upload the summary record
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: observes-change-summary
+        path: observes-change-summary.json
+        if-no-files-found: ignore
+
+  build-wasm:
+    needs: rebuild-needed
+    if: ${{ !cancelled() && needs.rebuild-needed.outputs.value != 'false' }}
+    timeout-minutes: 30
+    name: ubu24-emscr-runtime22
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup emsdk
+      uses: emscripten-core/setup-emsdk@v16
+      with:
+        # The emsdk pin must match the llvm-wasm cell.
+        version: '4.0.9'
+
+    - name: Setup LLVM/Clang/LLD built for wasm
+      uses: compiler-research/ci-workflows/actions/setup-recipe@main
+      with:
+        recipe: llvm-wasm
+        version: '22'
+        os: ubuntu-24.04
+        arch: x86_64
+
+    # The tables clad compiles are rendered by clad-tblgen, which a build for
+    # wasm cannot run. Build one for the host first: it reads a table and
+    # writes text, so it needs only a native LLVM's TableGen and Support and
+    # nothing from clang, and utils/clad-tblgen configures on its own for
+    # exactly this.
+    - name: Build clad-tblgen for the host
+      run: |
+        # Any native LLVM with a TableGen library will do, and it need not be
+        # the one clad is built against: the tool renders the same tables
+        # whichever major it was compiled with. Take whatever the image
+        # already carries rather than pinning a version that may not be there.
+        for v in 20 19 18 17 16; do
+          if [ -d "/usr/lib/llvm-$v/lib/cmake/llvm" ]; then
+            NATIVE_LLVM="/usr/lib/llvm-$v"; break
+          fi
+        done
+        if [ -z "$NATIVE_LLVM" ]; then
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev
+          NATIVE_LLVM=/usr/lib/llvm-18
+        fi
+        echo "Rendering the tables with $NATIVE_LLVM"
+        cmake -S "$GITHUB_WORKSPACE/utils/clad-tblgen" -B tblgen-native \
+          -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$NATIVE_LLVM/lib/cmake/llvm"
+        cmake --build tblgen-native -j$(nproc)
+        echo "CLAD_TBLGEN=$(pwd)/tblgen-native/clad-tblgen" >> $GITHUB_ENV
+
+    - name: Build Clad for wasm
+      run: |
+        LLVM_BUILD_DIR="$(pwd)/install/build"
+        mkdir obj && cd obj
+        emcmake cmake -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_DIR=$LLVM_BUILD_DIR/lib/cmake/llvm \
+          -DClang_DIR=$LLVM_BUILD_DIR/lib/cmake/clang \
+          -DLLD_DIR=$LLVM_BUILD_DIR/lib/cmake/lld \
+          -DCLAD_BUILD_STATIC_ONLY=ON \
+          -DCLAD_TBLGEN="$CLAD_TBLGEN" \
+          -DLLVM_ENABLE_WERROR=On \
+          $GITHUB_WORKSPACE
+        emmake make -j$(nproc)
+
+    - name: Run the unittests under node
+      run: emmake make -j$(nproc) -C obj check-clad

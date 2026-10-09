@@ -66,6 +66,7 @@ public:
   const RooArgList& dependents() const { return _actualVars; }
 
   std::string getUniqueFuncName() const;
+  std::string getUniqueFuncCode() const;
 
   void setBinning(const RooAbsRealLValue &obs, const RooAbsBinning &binning, bool checkFlatness = true);
   const RooAbsBinning *getBinning(const RooAbsRealLValue &obs) const;

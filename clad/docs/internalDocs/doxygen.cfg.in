@@ -1,0 +1,104 @@
+# Doxygen configuration for clad's internal documentation.
+#
+# Only the settings clad differs from doxygen's own defaults on are listed,
+# plus the few it wants a specific answer to whatever the default happens to be:
+# readthedocs builds with doxygen 1.9.8 and a contributor may have anything, and
+# the defaults are not the same across those.
+#
+# Run `doxygen -g` to see a full file with every tag and its documentation.
+
+#--- Project -----------------------------------------------------
+
+PROJECT_NAME           = Clad
+PROJECT_NUMBER         = @PACKAGE_VERSION@
+PROJECT_BRIEF          = "Automatic differentiation plugin for C/C++"
+OUTPUT_DIRECTORY       = @docs_builddir@/build
+STRIP_FROM_PATH        = @clad_srcdir@
+STRIP_FROM_INC_PATH    = @clad_srcdir@
+JAVADOC_AUTOBRIEF      = YES
+TAB_SIZE               = 2
+EXTENSION_MAPPING      = intro=C++
+LOOKUP_CACHE_SIZE      = 4
+
+#--- What to extract ---------------------------------------------
+
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+IGNORE_PREFIX          = clad::
+
+#--- Diagnostics -------------------------------------------------
+
+# Default since 1.9.x, but stated so that turning it off is a deliberate act.
+WARNINGS               = YES
+# readthedocs builds the internal documentation on every build, pull request
+# previews included, so a comment that names a parameter the function does not
+# have fails that build the way a Sphinx warning does. Note that YES does *not*
+# do this -- doxygen still exits 0 -- and FAIL_ON_WARNINGS is what makes it exit
+# non-zero. readthedocs builds with doxygen 1.9.8; a newer one locally resolves
+# names 1.9.8 cannot, so a clean local run is not proof.
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
+# 1280 of them today; this waits until the ones below it are dealt with.
+WARN_IF_UNDOCUMENTED   = NO
+
+#--- Input -------------------------------------------------------
+
+INPUT                  = @clad_srcdir@/include \
+                         @clad_srcdir@/lib \
+                         @clad_srcdir@/tools \
+                         @docs_srcdir@/doxygen.intro
+RECURSIVE              = YES
+EXAMPLE_PATTERNS       =
+SOURCE_BROWSER         = YES
+STRIP_CODE_COMMENTS    = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+#--- HTML output -------------------------------------------------
+
+HTML_FOOTER            = @docs_srcdir@/doxygen.footer
+# Default NO on 1.9.8, which is what readthedocs builds with, and YES on 1.18.
+GENERATE_TREEVIEW      = YES
+GENERATE_LATEX         = NO
+GENERATE_TAGFILE       = clad.tag
+
+#--- XML output --------------------------------------------------
+
+GENERATE_XML           = YES
+XML_PROGRAMLISTING     = NO
+
+#--- Preprocessor ------------------------------------------------
+
+MACRO_EXPANSION        = YES
+# The build directory as well: clad's public headers expand tables that are
+# rendered there, and doxygen preprocesses those headers.
+INCLUDE_PATH           = @clad_srcdir@/include \
+                         @clad_bindir@/include \
+                         @clad_bindir@/lib/Differentiator
+# Attribute macros, which doxygen otherwise reads as part of the declaration
+# and then cannot parse what follows.
+PREDEFINED             = CLAD_NONDIFFERENTIABLE= \
+                         elidable_reverse_forw= \
+                         CUDA_HOST_DEVICE= \
+                         __attribute__(x)=
+
+#--- Graphs ------------------------------------------------------
+
+HAVE_DOT               = YES
+COLLABORATION_GRAPH    = NO
+TEMPLATE_RELATIONS     = YES
+INCLUDE_GRAPH          = NO
+INCLUDED_BY_GRAPH      = NO
+DOT_IMAGE_FORMAT       = svg
+
+#--- Other --------------------------------------------------------
+
+ABBREVIATE_BRIEF       =
+QT_AUTOBRIEF           = YES
+CASE_SENSE_NAMES       = YES
+FORCE_LOCAL_INCLUDES   = YES
+FILE_PATTERNS          =
+EXAMPLE_RECURSIVE      = YES
+LATEX_CMD_NAME         = latex
+LATEX_BIB_STYLE        = plain
+ALLEXTERNALS           = YES
+HIDE_UNDOC_RELATIONS   = NO

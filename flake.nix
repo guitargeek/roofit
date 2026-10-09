@@ -89,6 +89,56 @@
             ps.numpy
             ps.pandas
           ]);
+
+          # The builtin clad is a plugin for a specific Clang, and RooFit runs
+          # it through that Clang at runtime (see src/clad/CMakeLists.txt). It
+          # is independent of the LLVM inside ROOT: the two never meet. LLVM 22
+          # is the newest release that clad supports, see LLVM_MAX_SUPPORTED in
+          # clad/CMakeLists.txt.
+          llvmPackages = pkgs.llvmPackages_22;
+
+          # The wrapped clang knows where the C and C++ standard libraries
+          # live; the unwrapped one in llvmPackages.clang-unwrapped does not.
+          # The two tweaks are for clad's own test suite (-Dclad_tests=ON).
+          # They have to be baked into the wrapper rather than exported by the
+          # shell, because lit runs the compiler with a stripped environment.
+          clang = llvmPackages.clang.override (old: {
+            extraBuildCommands = (old.extraBuildCommands or "") + ''
+              # The wrapper passes linker flags to clang even when only
+              # compiling, and the resulting "unused argument" warnings make
+              # the tests fail, since they assert that clang stays silent.
+              echo "-Qunused-arguments" >> $out/nix-support/cc-cflags
+
+              # Make -fopenmp work out of the box, for the OpenMP tests.
+              echo "-isystem ${llvmPackages.openmp.dev}/include" >> $out/nix-support/cc-cflags
+              echo "-L${llvmPackages.openmp}/lib" >> $out/nix-support/cc-ldflags
+            '';
+          });
+
+          # Nixpkgs installs clang outside of LLVM's own prefix, but clad
+          # expects to find it next to the LLVM tools: the default for
+          # clad_compiler is the clang++ in LLVM_TOOLS_BINARY_DIR, and clad's
+          # tests look for clang and llvm-config there as well. Hence a joined
+          # prefix containing all of them, with the *wrapped* clang.
+          llvmTools = pkgs.symlinkJoin {
+            name = "llvm-tools-with-clang-${llvmPackages.llvm.version}";
+            paths = [
+              llvmPackages.llvm # FileCheck, not, count, ...
+              llvmPackages.llvm.dev # llvm-config
+              clang
+            ];
+          };
+
+          # LLVMConfig.cmake hardcodes LLVM_TOOLS_BINARY_DIR, so re-point it at
+          # the joined prefix above. Everything else keeps referring to the
+          # original store paths.
+          llvmCMakeDir = pkgs.runCommand "llvm-cmake-dir-${llvmPackages.llvm.version}" { } ''
+            mkdir -p $out
+            ln -s ${llvmPackages.llvm.dev}/lib/cmake/llvm/* $out/
+            rm $out/LLVMConfig.cmake
+            substitute ${llvmPackages.llvm.dev}/lib/cmake/llvm/LLVMConfig.cmake $out/LLVMConfig.cmake \
+              --replace-fail "${llvmPackages.llvm}/bin" "${llvmTools}/bin"
+          '';
         in
         mkShell {
           # tools
@@ -99,6 +149,10 @@
             pkg-config
             pythonEnv
             root-no-roofit
+            # For the builtin clad: FileCheck and friends, and lit, which are
+            # only needed with -Dclad_tests=ON, but are cheap to have around.
+            llvmPackages.llvm
+            lit
           ];
           # libraries you compile and link against
           buildInputs = with pkgs; [
@@ -115,14 +169,17 @@
             #   mkdir build && cd build && cmake $CONFIGURE_ARGS
             #
             # Add -Dfftw3=ON if you want the FFT-based RooFit classes (fftw is
-            # in this shell for that purpose).
+            # in this shell for that purpose), and -Dclad_tests=ON to also
+            # build and run the test suite of the builtin clad.
             export CONFIGURE_ARGS=" \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_INSTALL_PREFIX=../install \
                -Dccache=ON \
-               -Dclad=ON \
                -Dtesting=ON \
                -Dmathmore=ON \
+               -DLLVM_DIR=${llvmCMakeDir} \
+               -DClang_DIR=${llvmPackages.clang-unwrapped.dev}/lib/cmake/clang \
+               -DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit \
                .."
 
             # The interpreter needs to find the headers of the externals that

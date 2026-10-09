@@ -1,0 +1,166 @@
+if( NOT CLAD_BUILT_STANDALONE AND NOT LLVM_BUILD_TOOLS )
+  set(EXCLUDE_FROM_ALL ON)
+endif()
+
+set(CLAD_PLUGIN_SRC
+  ClangPlugin.cpp
+  ClangBackendPlugin.cpp
+  RequiredSymbols.cpp
+)
+
+llvm_add_library(cladPlugin STATIC ${CLAD_PLUGIN_SRC})
+# ClangPlugin.cpp reaches into lib/Differentiator for Diagnostics.h, which
+# expands a table rendered beside it in the build directory.
+target_include_directories(cladPlugin PRIVATE ${CLAD_GEN_LIB})
+add_dependencies(cladPlugin clad-tables)
+
+if (CLAD_BUILD_STATIC_ONLY)
+  target_compile_definitions(cladPlugin PRIVATE CLAD_BUILD_STATIC_ONLY)
+endif()
+
+set(link_libs cladDifferentiator)
+
+# Supply the symbols RequiredSymbols.cpp references, which such a host lacks.
+# Link the clangAST archive file, not the clangAST target: the target would
+# also drag in LLVMSupport and duplicate its cl::opt registrations. A dylib
+# build already has them from libclang-cpp.
+if (NOT LLVM_LINK_LLVM_DYLIB AND TARGET clangAST)
+  list(APPEND link_libs "$<TARGET_FILE:clangAST>")
+endif()
+
+if (NOT CLAD_BUILD_STATIC_ONLY)
+  # Get rid of libLLVM-X.so which is appended to the list of static libraries.
+  if (LLVM_LINK_LLVM_DYLIB)
+    set(new_libs ${link_libs})
+    set(libs ${new_libs})
+    while(NOT "${new_libs}" STREQUAL "")
+      foreach(lib ${new_libs})
+        if(TARGET ${lib})
+          get_target_property(transitive_libs ${lib} INTERFACE_LINK_LIBRARIES)
+          if (NOT transitive_libs)
+            continue()
+          endif()
+          foreach(transitive_lib ${transitive_libs})
+            get_target_property(lib_type ${transitive_lib} TYPE)
+            if("${lib_type}" STREQUAL "STATIC_LIBRARY")
+              list(APPEND static_transitive_libs ${transitive_lib})
+            else()
+              # Filter our libLLVM.so and friends.
+              continue()
+            endif()
+            if(NOT ${transitive_lib} IN_LIST libs)
+              list(APPEND newer_libs ${transitive_lib})
+              list(APPEND libs ${transitive_lib})
+            endif()
+          endforeach(transitive_lib)
+          # Update the target properties with the list of only static libraries.
+          set_target_properties(${lib} PROPERTIES INTERFACE_LINK_LIBRARIES "${static_transitive_libs}")
+          set(static_transitive_libs "")
+        endif()
+      endforeach(lib)
+      set(new_libs ${newer_libs})
+      set(newer_libs "")
+    endwhile()
+  endif(LLVM_LINK_LLVM_DYLIB)
+
+
+  add_llvm_library(clad MODULE ${CLAD_PLUGIN_SRC} DISABLE_LLVM_LINK_LLVM_DYLIB PLUGIN_TOOL clang)
+  # ClangPlugin.cpp reaches into lib/Differentiator for Diagnostics.h, which
+  # expands a table rendered beside it in the build directory.
+  target_include_directories(clad PRIVATE ${CLAD_GEN_LIB})
+  add_dependencies(clad clad-tables)
+
+  target_link_libraries(clad PRIVATE ${link_libs})
+
+  # Add Enzyme as a backend.
+  if (CLAD_ENABLE_ENZYME_BACKEND)
+
+    if (LLVM_VERSION_MAJOR VERSION_LESS 19 OR LLVM_VERSION_MAJOR VERSION_GREATER 21)
+      message(FATAL_ERROR "The enzyme backend is supported only in LLVM versions 19 to 21")
+    endif()
+
+    if (NOT UNIX)
+      message(FATAL_ERROR "The enzyme backend is only supported on Unix platforms")
+    endif()
+
+    set(_enzyme_build_type ${CMAKE_CFG_INTDIR})
+
+    # Set build byproducts only needed by Ninja.
+    set(_enzyme_static_target EnzymeStatic-${LLVM_VERSION_MAJOR})
+    set(_enzyme_static_archive_name ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}${CMAKE_STATIC_LIBRARY_PREFIX}${_enzyme_static_target}${CMAKE_STATIC_LIBRARY_SUFFIX})
+    if("${CMAKE_GENERATOR}" STREQUAL "Ninja")
+      set(ENZYME_BYPRODUCTS ${_enzyme_static_archive_name})
+    endif()
+
+    set(EXTRA_CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
+                       -DLLVM_DIR=${LLVM_DIR}
+                       -DENZYME_CLANG=OFF
+                       -DENZYME_STATIC_LIB=On
+                       -DLLVM_EXTERNAL_LIT=${LLVM_EXTERNAL_LIT}")
+    clad_externalProject_add(
+      Enzyme
+      GIT_REPOSITORY https://github.com/EnzymeAD/Enzyme
+      GIT_TAG v0.0.290
+      UPDATE_COMMAND ""
+      # The tag is pinned, so there is nothing to update, and leaving the step
+      # connected costs a great deal: an empty UPDATE_COMMAND never creates
+      # its stamp, so ninja finds it dirty and re-runs patch, configure, build
+      # and install on every single build -- 23s where there is no work to do.
+      # Disconnecting it also disconnects the patch step, so after editing
+      # patches/enzyme.patch run `ninja Enzyme-patch` to re-apply it.
+      UPDATE_DISCONNECTED 1
+      EXTRA_CMAKE_ARGS ${EXTRA_CMAKE_ARGS}
+      SOURCE_SUBDIR enzyme
+      # Let Enzyme's own build decide what needs rebuilding, so editing its
+      # sources is picked up. A stamp cannot do that: it has no idea what the
+      # sub-project depends on. This is only affordable because the update
+      # step is disconnected -- left connected it drags patch, configure and
+      # install along with it on every build.
+      BUILD_ALWAYS 1
+      BUILD_COMMAND ${CMAKE_COMMAND} --build . --config ${_enzyme_build_type} --target ${_enzyme_static_target} -- -j8
+      #TEST_COMMAND ${CMAKE_COMMAND} --build . --config ${_enzyme_build_type} --target check-enzyme
+      #TEST_BEFORE_INSTALL 1
+      INSTALL_COMMAND ${CMAKE_COMMAND} --build . --config ${_enzyme_build_type} --target install-${_enzyme_static_target} -- -j8
+      BUILD_BYPRODUCTS ${ENZYME_BYPRODUCTS}
+      DEPENDS LLVMSupport
+    )
+
+    # Apply the patch from a step of our own rather than PATCH_COMMAND. The
+    # built-in patch step hangs off update, which CMake declares ALWAYS, so it
+    # is disconnected along with it and stops tracking anything. Hung off
+    # download instead it stays in the graph, and DEPENDS on the patch file
+    # rebuilds Enzyme whenever the patch changes.
+    ExternalProject_Add_Step(Enzyme clad-patch
+      COMMAND ${CMAKE_COMMAND} -E rm -rf <SOURCE_DIR>/enzyme/benchmarks
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${CMAKE_SOURCE_DIR}/patches/enzyme.patch <SOURCE_DIR>
+      # Reset first, so re-running the step is safe and editing the patch is
+      # all it takes to change what gets built.
+      COMMAND git -C <SOURCE_DIR> checkout -- enzyme
+      COMMAND git -C <SOURCE_DIR> apply enzyme.patch
+      DEPENDEES download
+      DEPENDERS configure
+      DEPENDS ${CMAKE_SOURCE_DIR}/patches/enzyme.patch
+      COMMENT "Applying clad's patch to Enzyme"
+      LOG 1)
+
+    # Register LLVMEnzyme for our build system.
+    add_library(LLVMEnzyme IMPORTED STATIC GLOBAL)
+    add_dependencies(LLVMEnzyme Enzyme) # Emzyme is the ExternalProject_Add target.
+    set_property(TARGET LLVMEnzyme PROPERTY IMPORTED_LOCATION ${_enzyme_static_archive_name})
+
+    # Paste the contents of libLLVMEnzyme-X.so into clad.so.
+    if (APPLE)
+      set(_enzyme_link_flags -Wl,-force_load $<TARGET_FILE:LLVMEnzyme> -Wl,-force_load cladDifferentiator)
+    elseif(MSVC)
+      set(_enzyme_link_flags "-WHOLEARCHIVE:" $<TARGET_FILE:LLVMEnzyme>)
+    else()
+      set(_enzyme_link_flags -Wl,--whole-archive $<TARGET_FILE:LLVMEnzyme> -Wl,--no-whole-archive)
+    endif()
+    target_link_libraries(clad PUBLIC ${_enzyme_link_flags})
+
+    add_dependencies(clad LLVMEnzyme)
+    set_source_files_properties(ClangBackendPlugin.cpp PROPERTIES COMPILE_DEFINITIONS CLAD_ENABLE_ENZYME_BACKEND)
+  endif(CLAD_ENABLE_ENZYME_BACKEND)
+endif()
+set_source_files_properties(ClangPlugin.cpp PROPERTIES COMPILE_DEFINITIONS CLANG_MAJOR_VERSION="${LLVM_VERSION_MAJOR}")

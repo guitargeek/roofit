@@ -580,3 +580,21 @@ std::list<double> *RooFormulaUtils::plotSamplingHint(BinningMap const &binnings,
 }
 
 /// \endcond
+
+////////////////////////////////////////////////////////////////////////////////
+/// The code of the function that the TFormula declared to the interpreter,
+/// `double <GetUniqueFuncName()>(double const *x[, double *p]) { return ...; }`,
+/// for compiling the generated code of the codegen backend outside of the
+/// interpreter. TFormula does not hand out the code itself, but it does hand
+/// out the body via GetExpFormula("CLING"), and the signature is fixed.
+std::string RooFormulaUtils::clingFunctionCode(TFormula const &formula)
+{
+   std::stringstream ss;
+   ss << "#include <TMath.h>\n\n"
+      << "double " << formula.GetUniqueFuncName() << "(double const *x";
+   if (formula.GetNpar() > 0) {
+      ss << ", double *p";
+   }
+   ss << ")\n{\n   return " << formula.GetExpFormula("CLING") << ";\n}\n";
+   return ss.str();
+}

@@ -8,6 +8,10 @@ set(roofit_legacy_eval_backend ON CACHE BOOL "" FORCE)
 
 add_subdirectory(codegen)
 add_subdirectory(batchcompute)
+# The builtin clad is not part of ROOT, see src/clad/CMakeLists.txt.
+if(builtin_clad)
+  add_subdirectory(clad)
+endif()
 # RooFit::MultiProcess is not built in this standalone repository yet. The
 # packages that use it check if the RooFitMultiProcess target exists.
 #if(NOT WIN32)

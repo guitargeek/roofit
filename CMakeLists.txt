@@ -67,6 +67,23 @@ else()
   set(roofit_minuit2_library Minuit2)
 endif()
 
+# Automatic differentiation with clad. With builtin_clad, the codegen backend
+# takes its derivatives from the clad in clad/, compiled with clang in a separate
+# process like ACLiC does, so that RooFit and clad can be developed together.
+# Without it, clad is used inside the interpreter, which requires a ROOT
+# installation that was built with clad. See src/clad/CMakeLists.txt.
+option(builtin_clad "Build clad from clad/ and use it for the derivatives of the codegen backend" ON)
+option(clad "Enable automatic differentiation with clad in the codegen backend" ${ROOT_clad_FOUND})
+option(clad_tests "Build the test suite of the builtin clad (needs lit and FileCheck)" OFF)
+
+if(builtin_clad AND NOT clad)
+  message(STATUS "builtin_clad=ON implies clad=ON")
+  set(clad ON)
+endif()
+if(clad AND NOT builtin_clad AND NOT ROOT_clad_FOUND)
+  message(FATAL_ERROR "clad=ON with builtin_clad=OFF requires a ROOT installation that was built with clad")
+endif()
+
 add_subdirectory(src)
 
 # compat/ holds headers that shadow headers of the ROOT installation to work

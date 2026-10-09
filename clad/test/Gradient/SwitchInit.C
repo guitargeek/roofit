@@ -1,0 +1,124 @@
+// RUN: %cladclang -Xclang -plugin-arg-clad -Xclang -disable-tbr %s -I%S/../../include -oSwitchInit.out 2>&1 | %filecheck %s
+// RUN: ./SwitchInit.out | %filecheck_exec %s
+
+#include "clad/Differentiator/Differentiator.h"
+
+double fn1(double i, double j) {
+  double res = 0;
+  switch (int count = 1;count) {
+    case 0: res += i * j; break;
+    case 1: res += i * i; {
+        case 2: res += j * j;
+      }
+    default: res += i * i * j * j;
+  }
+  return res;
+}
+
+// CHECK: void fn1_grad(double i, double j, double *_d_i, double *_d_j) {
+// CHECK-NEXT:     int _d_count = 0;
+// CHECK-NEXT:     int count = 0;
+// CHECK-NEXT:     int _cond0;
+// CHECK-NEXT:     double _t0;
+// CHECK-NEXT:     double _t1;
+// CHECK-NEXT:     double _t2;
+// CHECK-NEXT:     double _t3;
+// CHECK-NEXT:     double _d_res = 0.;
+// CHECK-NEXT:     double res = 0;
+// CHECK-NEXT:     {
+// CHECK-NEXT:         count = 1;
+// CHECK-NEXT:         _cond0 = count;
+// CHECK-NEXT:         switch (_cond0) {
+// CHECK-NEXT:             {
+// CHECK-NEXT:               case 0:
+// CHECK-NEXT:                 res += i * j;
+// CHECK-NEXT:                 _t0 = res;
+// CHECK-NEXT:             }
+// CHECK-NEXT:             {
+// CHECK-NEXT:                 break;
+// CHECK-NEXT:             }
+// CHECK-NEXT:             {
+// CHECK-NEXT:               case 1:
+// CHECK-NEXT:                 res += i * i;
+// CHECK-NEXT:                 _t1 = res;
+// CHECK-NEXT:             }
+// CHECK-NEXT:             {
+// CHECK-NEXT:                 {
+// CHECK-NEXT:                   case 2:
+// CHECK-NEXT:                     res += j * j;
+// CHECK-NEXT:                     _t2 = res;
+// CHECK-NEXT:                 }
+// CHECK-NEXT:             }
+// CHECK-NEXT:             {
+// CHECK-NEXT:               default:
+// CHECK-NEXT:                 res += i * i * j * j;
+// CHECK-NEXT:                 _t3 = res;
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT:     _d_res += 1;
+// CHECK-NEXT:     {
+// CHECK-NEXT:         switch (_cond0) {
+// CHECK-NEXT:           default:
+// CHECK-NEXT:           case 2:
+// CHECK-NEXT:           case 1:
+// CHECK-NEXT:             ;
+// CHECK-NEXT:             {
+// CHECK-NEXT:                 {
+// CHECK-NEXT:                     res = _t3;
+// CHECK-NEXT:                     *_d_i += _d_res * j * j * i;
+// CHECK-NEXT:                     *_d_i += i * _d_res * j * j;
+// CHECK-NEXT:                     *_d_j += i * i * _d_res * j;
+// CHECK-NEXT:                     *_d_j += i * i * j * _d_res;
+// CHECK-NEXT:                 }
+// CHECK-NEXT:                 if (_cond0 != 0 && _cond0 != 1 && _cond0 != 2)
+// CHECK-NEXT:                     break;
+// CHECK-NEXT:             }
+// CHECK-NEXT:             {
+// CHECK-NEXT:                 {
+// CHECK-NEXT:                     {
+// CHECK-NEXT:                         res = _t2;
+// CHECK-NEXT:                         *_d_j += _d_res * j;
+// CHECK-NEXT:                         *_d_j += j * _d_res;
+// CHECK-NEXT:                     }
+// CHECK-NEXT:                     if (2 == _cond0)
+// CHECK-NEXT:                         break;
+// CHECK-NEXT:                 }
+// CHECK-NEXT:             }
+// CHECK-NEXT:             {
+// CHECK-NEXT:                 {
+// CHECK-NEXT:                     res = _t1;
+// CHECK-NEXT:                     *_d_i += _d_res * i;
+// CHECK-NEXT:                     *_d_i += i * _d_res;
+// CHECK-NEXT:                 }
+// CHECK-NEXT:                 if (1 == _cond0)
+// CHECK-NEXT:                     break;
+// CHECK-NEXT:             }
+// CHECK-NEXT:           case 0:
+// CHECK-NEXT:             ;
+// CHECK-NEXT:             {
+// CHECK-NEXT:                 {
+// CHECK-NEXT:                     res = _t0;
+// CHECK-NEXT:                     *_d_i += _d_res * j;
+// CHECK-NEXT:                     *_d_j += i * _d_res;
+// CHECK-NEXT:                 }
+// CHECK-NEXT:                 if (0 == _cond0)
+// CHECK-NEXT:                     break;
+// CHECK-NEXT:             }
+// CHECK-NEXT:         }
+// CHECK-NEXT:     }
+// CHECK-NEXT: }
+
+#define TEST_2(F, x, y)                                                        \
+  {                                                                            \
+    result[0] = result[1] = 0;                                                 \
+    auto d_##F = clad::gradient(F);                                            \
+    d_##F.execute(x, y, result, result + 1);                                   \
+    printf("{%.2f, %.2f}\n", result[0], result[1]);                            \
+  }
+
+int main() {
+  double result[2] = {};
+
+  TEST_2(fn1, 3, 5); // CHECK-EXEC: {156.00, 100.00}
+}

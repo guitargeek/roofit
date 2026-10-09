@@ -539,6 +539,14 @@ if(clad)
   target_compile_definitions(RooFitCore PUBLIC ROOFIT_CLAD)
 endif()
 
+# With the builtin clad, RooFuncWrapper compiles the derivatives of the
+# generated code in a separate process instead of asking the interpreter, see
+# src/clad/CMakeLists.txt. Private: only RooFuncWrapper tells the difference.
+if(builtin_clad)
+  target_compile_definitions(RooFitCore PRIVATE ROOFIT_BUILTIN_CLAD)
+  target_link_libraries(RooFitCore PRIVATE RooFitClad)
+endif()
+
 if(cuda)
   target_compile_definitions(RooFitCore PUBLIC ROOFIT_CUDA)
 endif()
