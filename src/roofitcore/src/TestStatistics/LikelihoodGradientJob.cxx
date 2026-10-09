@@ -21,8 +21,7 @@
 #include "RooMsgService.h"
 #include "RooMinimizer.h"
 
-#include "Minuit2/Minuit2Minimizer.h"
-#include "Minuit2/MnStrategy.h"
+#include "RooMinuit2Helpers.h"
 
 #include <cmath>
 
@@ -56,7 +55,7 @@ void LikelihoodGradientJob::synchronizeWithMinimizer(const ROOT::Math::Minimizer
 void LikelihoodGradientJob::setStrategy(int istrat)
 {
    assert(istrat >= 0);
-   ROOT::Minuit2::MnStrategy strategy(static_cast<unsigned int>(istrat));
+   RooFit::Detail::Minuit2::MnStrategy strategy(static_cast<unsigned int>(istrat));
 
    setStepTolerance(strategy.GradientStepTolerance());
    setGradTolerance(strategy.GradientTolerance());
@@ -169,9 +168,9 @@ void LikelihoodGradientJob::update_state()
       auto gradient_message =
          get_manager()->messenger().receive_from_master_on_worker<RooFit::MultiProcess::Message>(&more);
       assert(more);
-      auto gradient_message_begin = gradient_message.data<ROOT::Minuit2::DerivatorElement>();
+      auto gradient_message_begin = gradient_message.data<RooFit::Detail::Minuit2::DerivatorElement>();
       auto gradient_message_end =
-         gradient_message_begin + gradient_message.size() / sizeof(ROOT::Minuit2::DerivatorElement);
+         gradient_message_begin + gradient_message.size() / sizeof(RooFit::Detail::Minuit2::DerivatorElement);
       std::copy(gradient_message_begin, gradient_message_end, grad_.begin());
 
       auto minuit_internal_x_message =
@@ -194,7 +193,7 @@ void LikelihoodGradientJob::update_state()
       }
 
       // Since the gradient parallelization only support Minuit 2, we can do this cast
-      auto &minim = static_cast<ROOT::Minuit2::Minuit2Minimizer &>(*minimizer_->_minimizer);
+      auto &minim = static_cast<RooFit::Detail::Minuit2::Minuit2Minimizer &>(*minimizer_->_minimizer);
 
       // The master already knows the function value at the current point from
       // the line search that Minuit just completed; pre-seeding the derivator's
@@ -219,7 +218,7 @@ void LikelihoodGradientJob::update_state()
 void LikelihoodGradientJob::run_derivator(unsigned int i_component) const
 {
    // Since the gradient parallelization only support Minuit 2, we can do this cast
-   auto &minim = static_cast<ROOT::Minuit2::Minuit2Minimizer &>(*minimizer_->_minimizer);
+   auto &minim = static_cast<RooFit::Detail::Minuit2::Minuit2Minimizer &>(*minimizer_->_minimizer);
 
    // Calculate the derivative etc for these parameters
    grad_[i_component] = gradf_.FastPartialDerivative(minim.GetFCN(), minimizer_->fitter()->Config().ParamsSettings(),

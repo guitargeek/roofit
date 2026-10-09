@@ -26,7 +26,7 @@ if(TARGET RooFitMultiProcess)
   list(APPEND EXTRA_LIBRARIES RooFitMultiProcess)
   #FIXME: The ProcessTimer.h exposes json in its interface:
   list(APPEND EXTRA_LIBRARIES nlohmann_json::nlohmann_json)
-  list(APPEND EXTRA_DEPENDENCIES Minuit2)
+  list(APPEND EXTRA_DEPENDENCIES ${roofit_minuit2_library})
 endif()
 
 if(roofit_legacy_eval_backend)
@@ -502,7 +502,28 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
 # Minuit2 is needed in the implementation of RooMinimizerFcn, to advertise
 # vanishing second derivatives to Minuit2Minimizer.
-target_link_libraries(RooFitCore PRIVATE Minuit2)
+#
+# In this repository, it is either the builtin Minuit2 or the one of the ROOT
+# installation, see the builtin_minuit2 option. The Minuit2 headers are included
+# via res/RooMinuit2Helpers.h, which the other RooFit packages use too, so the
+# dependency is public.
+target_link_libraries(RooFitCore PUBLIC ${roofit_minuit2_library})
+
+if(builtin_minuit2)
+  target_compile_definitions(RooFitCore PUBLIC ROOFIT_BUILTIN_MINUIT2)
+  set(minuit2_has_second_derivative_always_vanishes TRUE)
+else()
+  # Minuit2Minimizer::SetSecondDerivativeAlwaysVanishesFunc() is newer than
+  # some of the ROOT versions this repository is built against.
+  find_file(minuit2_minimizer_header Minuit2/Minuit2Minimizer.h HINTS ${ROOT_INCLUDE_DIRS})
+  if(minuit2_minimizer_header)
+    file(STRINGS ${minuit2_minimizer_header} minuit2_has_second_derivative_always_vanishes
+         REGEX "SetSecondDerivativeAlwaysVanishesFunc")
+  endif()
+endif()
+if(minuit2_has_second_derivative_always_vanishes)
+  target_compile_definitions(RooFitCore PRIVATE ROOFIT_MINUIT2_HAS_SECOND_DERIVATIVE_ALWAYS_VANISHES)
+endif()
 
 # The following definitions are PUBLIC so they can also be used in ROOT-internal tests
 
@@ -589,6 +610,7 @@ if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
           src/ValueChecking.h
           src/RooImproperIntegrator1D.h
           res/RooFitImplHelpers.h
+          res/RooMinuit2Helpers.h
           res/RooUnitTest.h
   )
 endif()

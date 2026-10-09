@@ -17,8 +17,7 @@
 #include "RooAbsPdf.h"
 #include "RooNaNPacker.h"
 
-#include <Minuit2/Minuit2Minimizer.h>
-#include <Minuit2/FCNBase.h>
+#include "RooMinuit2Helpers.h"
 
 #include <iomanip> // std::setprecision
 
@@ -27,7 +26,7 @@ namespace TestStatistics {
 
 namespace {
 
-class MinuitGradFunctor : public ROOT::Minuit2::FCNBase {
+class MinuitGradFunctor : public RooFit::Detail::Minuit2::FCNBase {
 public:
    MinuitGradFunctor(MinuitFcnGrad const &fcn, double errorLevel) : _fcn{fcn}, _up{errorLevel} {}
 
@@ -52,10 +51,10 @@ public:
       _fcn.GradientWithPrevResult(v.data(), output.data(), previous_grad, previous_g2, previous_gstep, fValAtV);
       return output;
    }
-   ROOT::Minuit2::GradientParameterSpace gradParameterSpace() const override
+   RooFit::Detail::Minuit2::GradientParameterSpace gradParameterSpace() const override
    {
-      return _fcn.returnsInMinuit2ParameterSpace() ? ROOT::Minuit2::GradientParameterSpace::Internal
-                                                   : ROOT::Minuit2::GradientParameterSpace::External;
+      return _fcn.returnsInMinuit2ParameterSpace() ? RooFit::Detail::Minuit2::GradientParameterSpace::Internal
+                                                   : RooFit::Detail::Minuit2::GradientParameterSpace::External;
    }
 
    // TODO: Implement this
@@ -285,7 +284,7 @@ bool MinuitFcnGrad::Synchronize(std::vector<ROOT::Fit::ParameterSettings> &param
 
 void MinuitFcnGrad::initMinimizer(ROOT::Math::Minimizer &minim, RooMinimizer * /*context*/)
 {
-   auto &minuit = dynamic_cast<ROOT::Minuit2::Minuit2Minimizer &>(minim);
+   auto &minuit = dynamic_cast<RooFit::Detail::Minuit2::Minuit2Minimizer &>(minim);
    minuit.SetFCN(getNDim(), std::make_unique<MinuitGradFunctor>(*this, minim.ErrorDef()));
 }
 

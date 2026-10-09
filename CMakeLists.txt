@@ -55,6 +55,18 @@ option(pyroot "Build the RooFit pythonizations" ON)
 # since the pythonizations cannot be built without it.
 find_package(Python3 COMPONENTS Interpreter)
 
+# With builtin_minuit2, RooFit uses the Minuit2 in math/minuit2 instead of the
+# one of the ROOT installation, so the two can be developed together. See
+# math/CMakeLists.txt for how it is kept apart from ROOT's Minuit2.
+option(builtin_minuit2 "Build Minuit2 from math/minuit2 and use it in RooFit" ON)
+
+if(builtin_minuit2)
+  add_subdirectory(math)
+  set(roofit_minuit2_library RooFitMinuit2)
+else()
+  set(roofit_minuit2_library Minuit2)
+endif()
+
 add_subdirectory(src)
 
 # compat/ holds headers that shadow headers of the ROOT installation to work
@@ -139,6 +151,10 @@ if(testing)
         "PATH=path_list_prepend:${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
     roofit_collect_targets(${CMAKE_CURRENT_SOURCE_DIR}/src all_targets)
+    if(builtin_minuit2)
+      roofit_collect_targets(${CMAKE_CURRENT_SOURCE_DIR}/math minuit2_targets)
+      list(APPEND all_targets ${minuit2_targets})
+    endif()
 
     set(include_paths)
     foreach(target ${all_targets})
@@ -170,6 +186,9 @@ if(testing)
     list(REMOVE_DUPLICATES test_environment)
     roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/src "${test_environment}")
     roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/tutorials "${test_environment}")
+    if(builtin_minuit2)
+      roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/math "${test_environment}")
+    endif()
     if(pyroot)
       roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/python "${test_environment}")
     endif()

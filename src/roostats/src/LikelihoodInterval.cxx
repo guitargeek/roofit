@@ -57,6 +57,7 @@
 #include "Math/MinimizerOptions.h"
 #include "RooFunctor.h"
 #include "RooProfileLL.h"
+#include "RooMinuit2Helpers.h"
 
 #include "TMinuitMinimizer.h"
 
@@ -262,7 +263,7 @@ bool LikelihoodInterval::CreateMinimizer() {
    // do not use static instance of TMInuit which could interfere with RooFit
    if (minimType == "Minuit")  TMinuitMinimizer::UseStaticMinuit(false);
    // create minimizer class
-   fMinimizer = std::shared_ptr<ROOT::Math::Minimizer>(ROOT::Math::Factory::CreateMinimizer(minimType, "Migrad"));
+   fMinimizer = std::shared_ptr<ROOT::Math::Minimizer>(RooFit::Detail::createMinimizer(minimType, "Migrad"));
 
    if (!fMinimizer.get()) return false;
 

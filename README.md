@@ -127,11 +127,54 @@ Pass `-Dpyroot=OFF` to CMake if you don't want the Python part at all. numpy is
 needed for the `to_numpy()` interfaces and their tests, pandas for
 `RooAbsData.to_pandas()`.
 
+## Minuit 2
+
+This repository also contains [Minuit 2](https://github.com/root-project/root/tree/master/math/minuit2),
+since minimizer development is increasingly driven by RooFit needs. By default,
+RooFit is built against this builtin Minuit 2, so the two can be developed
+together. Configure with `-Dbuiltin_minuit2=OFF` to use the Minuit 2 of the ROOT
+installation instead.
+
+`math/minuit2/` is a copy of the same directory in the ROOT repository, and it
+is kept byte-identical to it: syncing is a plain copy of the directory, and
+changes made here apply to ROOT as they are.
+
+The builtin Minuit 2 has to live in the same process as the Minuit 2 of the ROOT
+installation, which ROOT loads whenever something else asks for the `"Minuit2"`
+minimizer. To avoid clashes, the build compiles a renamed copy of the sources
+that it generates in `<build>/math/minuit2/`:
+
+| | ROOT | builtin |
+| --- | --- | --- |
+| library | `libMinuit2` | `libRooFitMinuit2` |
+| namespace | `ROOT::Minuit2` | `ROOT::RooFitMinuit2` |
+| headers | `Minuit2/*.h` | `RooFitMinuit2/*.h` |
+| minimizer plugin | `"Minuit2"` | `"RooFitMinuit2"` |
+
+Always edit the files in `math/minuit2/`; the generated copies are rewritten
+whenever the originals change. They start with a `#line` directive that points
+back to the originals, so compiler errors and debuggers show the right files.
+
+RooFit keeps calling the minimizer `"Minuit2"`, e.g. in `RooFit::Minimizer("Minuit2")`
+or as the default minimizer, but creates the builtin one for it. The RooFit
+code that uses Minuit 2 classes directly does so via the namespace alias
+`RooFit::Detail::Minuit2`, and creates minimizers via
+`RooFit::Detail::createMinimizer()`, both in
+[`src/roofitcore/res/RooMinuit2Helpers.h`](src/roofitcore/res/RooMinuit2Helpers.h).
+All the details are in [`math/CMakeLists.txt`](math/CMakeLists.txt).
+
+The Minuit 2 tests are built with the other tests, and they all have `minuit2`
+in their names:
+
+```bash
+cd build
+ctest -R minuit2
+```
+
 ## What you can expect from this repo in the future
 
 * Integration of the RooFit parts from [roottest](https://github.com/root-project/roottest/tree/master/root/roofitstats) and [rootbench](https://github.com/root-project/rootbench/tree/master/root/roofit).
 * Mirror also RooFit/RooStats tutorials for testing
 * Integration of key experiment frameworks for increased test coverage
 * Improved CI setup that also includes the RooFit CUDA backend
-* If relevant, it will also mirror [Minuit 2](https://github.com/root-project/root/tree/master/math/minuit2), since minimizer development is increasingly driven by RooFit needs
 * Reducing divergence in the CMake code in ROOT and this repo

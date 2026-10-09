@@ -29,13 +29,13 @@
 #include "RooConstraintSum.h"
 #include "RooEvaluatorWrapper.h"
 #include "RooMinimizer.h"
+#include "RooMinuit2Helpers.h"
 #include "RooMsgService.h"
 #include "RooNaNPacker.h"
 #include "RooCategory.h"
 #include "RooRealVar.h"
 
 #include "Math/Functor.h"
-#include "Minuit2/Minuit2Minimizer.h"
 #include "TMatrixDSym.h"
 
 #include <fstream>
@@ -318,12 +318,12 @@ void RooMinimizerFcn::initMinimizer(ROOT::Math::Minimizer &minim, RooMinimizer *
       minim.SetHessianFunction(
          std::bind(&RooMinimizerFcn::evaluateHessian, this, std::placeholders::_1, std::placeholders::_2));
    }
-#if 0
+#ifdef ROOFIT_MINUIT2_HAS_SECOND_DERIVATIVE_ALWAYS_VANISHES
    // The independence information for skipping vanishing second derivatives
    // in numerical Hessian computations is a Minuit2-only feature, so it is
    // wired up directly with the concrete minimizer type instead of going
    // through the ROOT::Math::Minimizer interface.
-   if (auto *minuit2 = dynamic_cast<ROOT::Minuit2::Minuit2Minimizer *>(&minim)) {
+   if (auto *minuit2 = dynamic_cast<RooFit::Detail::Minuit2::Minuit2Minimizer *>(&minim)) {
       minuit2->SetSecondDerivativeAlwaysVanishesFunc(
          [this](unsigned int i, unsigned int j) { return secondDerivativeAlwaysVanishes(i, j); });
    }

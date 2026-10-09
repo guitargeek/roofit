@@ -62,6 +62,7 @@ Various methods are available to control verbosity or profiling.
 #endif
 
 #include "RooFitImplHelpers.h"
+#include "RooMinuit2Helpers.h"
 
 #include <Fit/BasicFCN.h>
 #include <Math/Minimizer.h>
@@ -1147,7 +1148,7 @@ bool RooMinimizer::calculateMinosErrors()
 
 void RooMinimizer::initMinimizer()
 {
-   _minimizer = std::unique_ptr<ROOT::Math::Minimizer>(_config.CreateMinimizer());
+   _minimizer = std::unique_ptr<ROOT::Math::Minimizer>(RooFit::Detail::createMinimizer(_config));
    _fcn->initMinimizer(*_minimizer, this);
    _minimizer->SetVariables(_config.ParamsSettings().begin(), _config.ParamsSettings().end());
 
