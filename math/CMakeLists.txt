@@ -203,6 +203,15 @@ endif()
 foreach(name ${minuit2_plugin_tests})
   ROOT_EXECUTABLE(minuit2_${name} ${test_dir}/${name}.cxx LIBRARIES ${minuit2_test_root_libraries} RooFitMinuit2)
   ROOT_ADD_TEST(minuit2_${name} COMMAND minuit2_${name})
+  # These tests reach the builtin Minuit2 only through the plugin manager and
+  # reference none of its symbols, so a linker that drops unreferenced
+  # libraries (--as-needed, the default on Ubuntu) would not link
+  # libRooFitMinuit2 at all. Then the "RooFitMinuit2" plugin handler, which the
+  # library registers when it is loaded, does not exist and the minimizer
+  # cannot be created. Keep the library linked regardless.
+  if(UNIX AND NOT APPLE)
+    target_link_options(minuit2_${name} PRIVATE LINKER:--no-as-needed)
+  endif()
 endforeach()
 
 if(TARGET GTest::gtest)
