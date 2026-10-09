@@ -16,7 +16,6 @@
 #ifndef ROO_SIMULTANEOUS
 #define ROO_SIMULTANEOUS
 
-#include <RooAICRegistry.h>
 #include <RooAbsCacheElement.h>
 #include <RooAbsPdf.h>
 #include <RooArgList.h>
@@ -107,6 +106,8 @@ public:
                                   const RooArgSet* auxProto=nullptr, bool verbose= false) const override ;
 
   std::unique_ptr<RooAbsArg> compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileContext & ctx) const override;
+
+  bool indexCatIsObservable(RooArgSet const &vars) const;
 
 protected:
 

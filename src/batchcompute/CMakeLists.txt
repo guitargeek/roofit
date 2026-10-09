@@ -108,3 +108,15 @@ if(vdt OR builtin_vdt)
     endif()
   endforeach()
 endif()
+
+# ROOT's TThreadExecutor is used for the optional multi-threaded evaluation of
+# large batches. In the ROOT build, this is `if(imt)`. Here, what matters is if
+# the ROOT installation was built with IMT, because that is what defines
+# R__USE_IMT in RConfigure.h.
+if(ROOT_imt_FOUND)
+  foreach(library RooBatchCompute_GENERIC RooBatchCompute_SSE4.1 RooBatchCompute_AVX RooBatchCompute_AVX2 RooBatchCompute_AVX512 )
+    if(TARGET ${library})
+      target_link_libraries(${library} PRIVATE Imt)
+    endif()
+  endforeach()
+endif()

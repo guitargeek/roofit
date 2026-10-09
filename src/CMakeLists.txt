@@ -8,8 +8,9 @@ set(roofit_legacy_eval_backend ON CACHE BOOL "" FORCE)
 
 add_subdirectory(codegen)
 add_subdirectory(batchcompute)
-#if (roofit_multiprocess)
-  #add_subdirectory(roofitZMQ)
+# RooFit::MultiProcess is not built in this standalone repository yet. The
+# packages that use it check if the RooFitMultiProcess target exists.
+#if(NOT WIN32)
   #add_subdirectory(multiprocess)
 #endif()
 add_subdirectory(roofitcore)

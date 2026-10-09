@@ -64,26 +64,7 @@ std::unique_ptr<RooDataHist> generateBinnedAsimov(RooAbsPdf const &pdf, RooRealV
 
 } // namespace
 
-class TestStatisticTest : public testing::TestWithParam<std::tuple<RooFit::EvalBackend>> {
-public:
-   TestStatisticTest() : _evalBackend{RooFit::EvalBackend::Legacy()} {}
-
-private:
-   void SetUp() override
-   {
-      RooRandom::randomGenerator()->SetSeed(1337ul);
-      _evalBackend = std::get<0>(GetParam());
-      _changeMsgLvl = std::make_unique<RooHelpers::LocalChangeMsgLevel>(RooFit::WARNING);
-   }
-
-   void TearDown() override { _changeMsgLvl.reset(); }
-
-protected:
-   RooFit::EvalBackend _evalBackend;
-
-private:
-   std::unique_ptr<RooHelpers::LocalChangeMsgLevel> _changeMsgLvl;
-};
+using TestStatisticTest = RooFitEvalBackendTest;
 
 TEST_P(TestStatisticTest, IntegrateBins)
 {
@@ -158,12 +139,12 @@ TEST_P(TestStatisticTest, IntegrateBins_SubRange)
 
    a.setVal(3.);
    std::unique_ptr<RooFitResult> fit1(
-      pdf.fitTo(*dataS, Save(), PrintLevel(-1), Optimize(0), Range("range"), _evalBackend, SumW2Error(false)));
+      pdf.fitTo(*dataS, Save(), PrintLevel(-1), Range("range"), _evalBackend, SumW2Error(false)));
    pdf.plotOn(frame.get(), LineColor(kRed), Name("standard"), Range("range"), NormRange("range"));
 
    a.setVal(3.);
-   std::unique_ptr<RooFitResult> fit2(pdf.fitTo(*dataS, Save(), PrintLevel(-1), Optimize(0), Range("range"),
-                                                _evalBackend, SumW2Error(false), IntegrateBins(1.E-3)));
+   std::unique_ptr<RooFitResult> fit2(
+      pdf.fitTo(*dataS, Save(), PrintLevel(-1), Range("range"), _evalBackend, SumW2Error(false), IntegrateBins(1.E-3)));
    pdf.plotOn(frame.get(), LineColor(kBlue), Name("highRes"), Range("range"), NormRange("range"));
 
    EXPECT_GT(std::abs(getVal("a", targetValues) - getVal("a", fit1->floatParsFinal())),
@@ -209,13 +190,12 @@ TEST_P(TestStatisticTest, IntegrateBins_CustomBinning)
    dataS->plotOn(frame.get(), Name("data"));
 
    a.setVal(3.);
-   std::unique_ptr<RooFitResult> fit1(
-      pdf.fitTo(*dataS, Save(), PrintLevel(-1), _evalBackend, SumW2Error(false), Optimize(0)));
+   std::unique_ptr<RooFitResult> fit1(pdf.fitTo(*dataS, Save(), PrintLevel(-1), _evalBackend, SumW2Error(false)));
    pdf.plotOn(frame.get(), LineColor(kRed), Name("standard"));
 
    a.setVal(3.);
    std::unique_ptr<RooFitResult> fit2(
-      pdf.fitTo(*dataS, Save(), PrintLevel(-1), Optimize(0), _evalBackend, SumW2Error(false), IntegrateBins(1.E-3)));
+      pdf.fitTo(*dataS, Save(), PrintLevel(-1), _evalBackend, SumW2Error(false), IntegrateBins(1.E-3)));
    pdf.plotOn(frame.get(), LineColor(kBlue), Name("highRes"));
 
    EXPECT_GT(std::abs(getVal("a", targetValues) - getVal("a", fit1->floatParsFinal())),
@@ -409,13 +389,13 @@ TEST(RooChi2Var, ErrorTypesCrossCheck)
          // Chi2 value at a fixed parameter point should match to full precision.
          resetPars();
          std::unique_ptr<RooAbsReal> chi2New{gauss.createChi2(*hist, DataError(etype), backend)};
-         std::unique_ptr<RooAbsReal> chi2Legacy{gauss.createChi2(*hist, DataError(etype), EvalBackend::Legacy())};
+         std::unique_ptr<RooAbsReal> chi2Legacy{gauss.createChi2(*hist, DataError(etype), EvalBackend(EvalBackend::Value::Legacy))};
          EXPECT_FLOAT_EQ(chi2New->getVal(), chi2Legacy->getVal());
 
          // Minimisation should converge to the same minimum and parameter values.
          resetPars();
          std::unique_ptr<RooFitResult> fitLegacy{
-            gauss.chi2FitTo(*hist, DataError(etype), EvalBackend::Legacy(), Save(), PrintLevel(-1))};
+            gauss.chi2FitTo(*hist, DataError(etype), EvalBackend(EvalBackend::Value::Legacy), Save(), PrintLevel(-1))};
          resetPars();
          std::unique_ptr<RooFitResult> fitNew{
             gauss.chi2FitTo(*hist, DataError(etype), backend, Save(), PrintLevel(-1))};
@@ -448,7 +428,7 @@ TEST(RooChi2Var, ErrorTypesCrossCheck)
       RooRealVar nbkg("nbkg_func", "", 200., 0., 10000.);
       RooFormulaVar flat("flat", "flat", "nbkg_func + 0*x", {nbkg, x});
       std::unique_ptr<RooAbsReal> chi2Legacy{
-         flat.createChi2(*hist, DataError(RooAbsData::Expected), EvalBackend::Legacy())};
+         flat.createChi2(*hist, DataError(RooAbsData::Expected), EvalBackend(EvalBackend::Value::Legacy))};
       for (auto const &backend : chi2CrossCheckBackends()) {
          SCOPED_TRACE(std::string("Function mode, backend = ") + backend.name());
          std::unique_ptr<RooAbsReal> chi2New{flat.createChi2(*hist, DataError(RooAbsData::Expected), backend)};
@@ -494,13 +474,13 @@ TEST(RooChi2Var, RangedCrossCheck)
          // Chi2 value at a fixed parameter point.
          resetPars();
          std::unique_ptr<RooAbsReal> chi2New{gauss.createChi2(*hist, Range(rangeName), backend)};
-         std::unique_ptr<RooAbsReal> chi2Legacy{gauss.createChi2(*hist, Range(rangeName), EvalBackend::Legacy())};
+         std::unique_ptr<RooAbsReal> chi2Legacy{gauss.createChi2(*hist, Range(rangeName), EvalBackend(EvalBackend::Value::Legacy))};
          EXPECT_FLOAT_EQ(chi2New->getVal(), chi2Legacy->getVal());
 
          // Fit comparison.
          resetPars();
          std::unique_ptr<RooFitResult> fitLegacy{
-            gauss.chi2FitTo(*hist, Range(rangeName), EvalBackend::Legacy(), Save(), PrintLevel(-1))};
+            gauss.chi2FitTo(*hist, Range(rangeName), EvalBackend(EvalBackend::Value::Legacy), Save(), PrintLevel(-1))};
          resetPars();
          std::unique_ptr<RooFitResult> fitNew{
             gauss.chi2FitTo(*hist, Range(rangeName), backend, Save(), PrintLevel(-1))};
@@ -563,7 +543,7 @@ TEST(RooChi2Var, SimultaneousCrossCheck)
 
    // Legacy baseline, computed once.
    resetPars();
-   std::unique_ptr<RooFitResult> fitLegacy{simPdf.chi2FitTo(combHist, EvalBackend::Legacy(), Save(), PrintLevel(-1))};
+   std::unique_ptr<RooFitResult> fitLegacy{simPdf.chi2FitTo(combHist, EvalBackend(EvalBackend::Value::Legacy), Save(), PrintLevel(-1))};
    ASSERT_NE(fitLegacy, nullptr);
 
    for (auto const &backend : chi2CrossCheckBackends()) {
@@ -572,7 +552,7 @@ TEST(RooChi2Var, SimultaneousCrossCheck)
       // Chi2 value at a fixed parameter point.
       resetPars();
       std::unique_ptr<RooAbsReal> chi2New{simPdf.createChi2(combHist, backend)};
-      std::unique_ptr<RooAbsReal> chi2Legacy{simPdf.createChi2(combHist, EvalBackend::Legacy())};
+      std::unique_ptr<RooAbsReal> chi2Legacy{simPdf.createChi2(combHist, EvalBackend(EvalBackend::Value::Legacy))};
       EXPECT_FLOAT_EQ(chi2New->getVal(), chi2Legacy->getVal());
 
       // Fit with the current backend, compare to the legacy baseline.
@@ -611,8 +591,8 @@ TEST(RooNLLVar, CopyRangedNLL)
    // This bug is related to the implementation details of the old test
    // statistics, so the EvalBackend is forced to be Legacy
    using namespace RooFit;
-   std::unique_ptr<RooAbsReal> nll{model.createNLL(*ds, EvalBackend::Legacy())};
-   std::unique_ptr<RooAbsReal> nllrange{model.createNLL(*ds, Range("fitrange"), EvalBackend::Legacy())};
+   std::unique_ptr<RooAbsReal> nll{model.createNLL(*ds, EvalBackend(EvalBackend::Value::Legacy))};
+   std::unique_ptr<RooAbsReal> nllrange{model.createNLL(*ds, Range("fitrange"), EvalBackend(EvalBackend::Value::Legacy))};
 
    auto nllClone = std::make_unique<RooNLLVar>(static_cast<RooNLLVar &>(*nll));
    auto nllrangeClone = std::make_unique<RooNLLVar>(static_cast<RooNLLVar &>(*nllrange));
@@ -625,7 +605,7 @@ TEST(RooNLLVar, CopyRangedNLL)
 
 class OffsetBinTest : public testing::TestWithParam<std::tuple<RooFit::EvalBackend, bool, bool, bool, bool, bool>> {
 public:
-   OffsetBinTest() : _evalBackend{RooFit::EvalBackend::Legacy()} {}
+   OffsetBinTest() : _evalBackend{RooFit::EvalBackend(RooFit::EvalBackend::Value::Legacy)} {}
 
 private:
    void SetUp() override
@@ -878,12 +858,19 @@ TEST_P(TestStatisticTest, ConstantPdf)
    EXPECT_FLOAT_EQ(nllDs->getVal(), nllRef);
 }
 
-INSTANTIATE_TEST_SUITE_P(RooNLLVar, TestStatisticTest, testing::Values(ROOFIT_EVAL_BACKENDS),
-                         [](testing::TestParamInfo<TestStatisticTest::ParamType> const &paramInfo) {
-                            std::stringstream ss;
-                            ss << "EvalBackend" << std::get<0>(paramInfo.param).name();
-                            return ss.str();
-                         });
+INSTANTIATE_TEST_SUITE_P(RooNLLVar, TestStatisticTest, testing::Values(ROOFIT_EVAL_BACKENDS), EvalBackendParamName{});
+
+std::string offsetBinTestName(testing::TestParamInfo<OffsetBinTest::ParamType> const &paramInfo)
+{
+   std::stringstream ss;
+   ss << EvalBackendParamName{}(paramInfo);
+   ss << (std::get<1>(paramInfo.param) ? "Binned" : "Unbinned");
+   ss << (std::get<2>(paramInfo.param) ? "Extended" : "");
+   ss << (std::get<3>(paramInfo.param) ? "SumW2" : "");
+   ss << (std::get<4>(paramInfo.param) ? "SimPdf" : "");
+   ss << (std::get<5>(paramInfo.param) ? "BinnedL" : "");
+   return ss.str();
+}
 
 INSTANTIATE_TEST_SUITE_P(RooNLLVar, OffsetBinTest,
                          testing::Combine(testing::Values(ROOFIT_EVAL_BACKENDS), // EvalBackend
@@ -893,16 +880,7 @@ INSTANTIATE_TEST_SUITE_P(RooNLLVar, OffsetBinTest,
                                           testing::Values(false, true),          // wrap in a RooSimultaneous
                                           testing::Values(false)                 // binned likelihood code path
                                           ),
-                         [](testing::TestParamInfo<OffsetBinTest::ParamType> const &paramInfo) {
-                            std::stringstream ss;
-                            ss << "EvalBackend" << std::get<0>(paramInfo.param).name();
-                            ss << (std::get<1>(paramInfo.param) ? "Binned" : "Unbinned");
-                            ss << (std::get<2>(paramInfo.param) ? "Extended" : "");
-                            ss << (std::get<3>(paramInfo.param) ? "SumW2" : "");
-                            ss << (std::get<4>(paramInfo.param) ? "SimPdf" : "");
-                            ss << (std::get<5>(paramInfo.param) ? "BinnedL" : "");
-                            return ss.str();
-                         });
+                         offsetBinTestName);
 
 INSTANTIATE_TEST_SUITE_P(RooNLLVarBinnedL, OffsetBinTest,
                          testing::Combine(testing::Values(ROOFIT_EVAL_BACKENDS), // EvalBackend
@@ -912,16 +890,7 @@ INSTANTIATE_TEST_SUITE_P(RooNLLVarBinnedL, OffsetBinTest,
                                           testing::Values(false, true),          // wrap in a RooSimultaneous
                                           testing::Values(true)                  // binned likelihood code path
                                           ),
-                         [](testing::TestParamInfo<OffsetBinTest::ParamType> const &paramInfo) {
-                            std::stringstream ss;
-                            ss << "EvalBackend" << std::get<0>(paramInfo.param).name();
-                            ss << (std::get<1>(paramInfo.param) ? "Binned" : "Unbinned");
-                            ss << (std::get<2>(paramInfo.param) ? "Extended" : "");
-                            ss << (std::get<3>(paramInfo.param) ? "SumW2" : "");
-                            ss << (std::get<4>(paramInfo.param) ? "SimPdf" : "");
-                            ss << (std::get<5>(paramInfo.param) ? "BinnedL" : "");
-                            return ss.str();
-                         });
+                         offsetBinTestName);
 
 // Test if the data can be correctly reset for both individual and simultaneous
 // pdfs.
@@ -983,6 +952,61 @@ TEST(NLL, SetData)
 // pdf. The RooFit logic to figure out constrained parameters should however
 // now be confused by this, and not strip away these parameters from the list
 // of constrained parameters.
+#ifdef ROOFIT_LEGACY_EVAL_BACKEND
+/// Check that selecting the deprecated legacy evaluation backend emits a
+/// deprecation warning when the test statistic object is created.
+TEST(CreateNLL, LegacyBackendDeprecationWarning)
+{
+   RooHelpers::LocalChangeMsgLevel changeMsgLvl(RooFit::WARNING);
+
+   RooWorkspace ws;
+   ws.factory("Gaussian::gauss(x[-10, 10], mean[0, -10, 10], sigma[2, 0.1, 10])");
+   RooAbsPdf &gauss = *ws.pdf("gauss");
+   std::unique_ptr<RooDataSet> data{gauss.generate(*ws.var("x"), 100)};
+   std::unique_ptr<RooDataHist> hist{data->binnedClone()};
+
+   const std::string expectedSubstr = "deprecated and will be removed in ROOT 6.44";
+
+   {
+      RooHelpers::HijackMessageStream hijack(RooFit::WARNING, RooFit::InputArguments);
+      std::unique_ptr<RooAbsReal> nll{
+         gauss.createNLL(*data, RooFit::EvalBackend(RooFit::EvalBackend::Value::Legacy))};
+      EXPECT_NE(hijack.str().find(expectedSubstr), std::string::npos) << hijack.str();
+   }
+
+   {
+      RooHelpers::HijackMessageStream hijack(RooFit::WARNING, RooFit::InputArguments);
+      std::unique_ptr<RooAbsReal> chi2{
+         gauss.createChi2(*hist, RooFit::EvalBackend(RooFit::EvalBackend::Value::Legacy))};
+      EXPECT_NE(hijack.str().find(expectedSubstr), std::string::npos) << hijack.str();
+   }
+
+   // No warning must be emitted for the default backend.
+   {
+      RooHelpers::HijackMessageStream hijack(RooFit::WARNING, RooFit::InputArguments);
+      std::unique_ptr<RooAbsReal> nll{gauss.createNLL(*data)};
+      EXPECT_EQ(hijack.str().find(expectedSubstr), std::string::npos) << hijack.str();
+   }
+}
+#endif // ROOFIT_LEGACY_EVAL_BACKEND
+
+/// The deprecated BatchMode() command argument must still map to the right
+/// evaluation backends and emit a deprecation warning. This also guards
+/// against the C++ declarations going missing again, like they accidentally
+/// did between ROOT 6.30 and 6.40.
+TEST(CreateNLL, BatchModeDeprecationWarning)
+{
+   RooHelpers::LocalChangeMsgLevel changeMsgLvl(RooFit::WARNING);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+   RooHelpers::HijackMessageStream hijack(RooFit::WARNING, RooFit::InputArguments);
+   EXPECT_EQ(RooFit::BatchMode("cpu").getInt(0), static_cast<int>(RooFit::EvalBackend::Value::Cpu));
+   EXPECT_EQ(RooFit::BatchMode("off").getInt(0), static_cast<int>(RooFit::EvalBackend::Value::Legacy));
+   EXPECT_EQ(RooFit::BatchMode(true).getInt(0), static_cast<int>(RooFit::EvalBackend::Value::Cpu));
+   EXPECT_NE(hijack.str().find("deprecated and will be removed in ROOT 6.44"), std::string::npos) << hijack.str();
+#pragma GCC diagnostic pop
+}
+
 TEST(CreateNLL, CombineStyleConstraints)
 {
    RooHelpers::LocalChangeMsgLevel changeMsgLvl(RooFit::WARNING);

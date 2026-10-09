@@ -20,7 +20,6 @@
 /// A RooFormulaVar is a generic implementation of a real-valued object,
 /// which takes a RooArgList of servers and a C++ expression string defining how
 /// its value should be calculated from the given list of servers.
-/// RooFormulaVar uses a RooFormula object to perform the expression evaluation.
 ///
 /// If RooAbsPdf objects are supplied to RooFormulaVar as servers, their
 /// raw (unnormalized) values will be evaluated. Use RooGenericPdf, which
@@ -37,39 +36,35 @@
 /// ```
 /// Note that `x[i]` is an expression reserved for TFormula. All variable references
 /// are automatically converted to the TFormula-native format. If a variable with
-/// the name `x` is given, the RooFormula interprets `x[i]` as a list position,
+/// the name `x` is given, `x[i]` is interpreted as a list position,
 /// but `x` without brackets as the name of a RooFit object.
 ///
 /// The last two versions, while slightly less readable, are more versatile because
 /// the names of the arguments are not hard coded.
 ///
 
-
-#include "Riostream.h"
-
 #include "RooFormulaVar.h"
 #include "RooStreamParser.h"
 #include "RooMsgService.h"
-#include "RooFormula.h"
+#include "RooFormulaUtils.h"
 #include "RooAbsRealLValue.h"
-#include "RooAbsBinning.h"
-#include "RooCurve.h"
-#include "RooFitImplHelpers.h"
+
+#include "TFormula.h"
 
 #ifdef ROOFIT_LEGACY_EVAL_BACKEND
 #include "RooNLLVar.h"
 #include "RooChi2Var.h"
 #endif
 
+#include <iostream>
+#include <list>
+
 using std::ostream, std::istream, std::list;
 
 
 RooFormulaVar::RooFormulaVar() {}
 
-RooFormulaVar::~RooFormulaVar()
-{
-   if(_formula) delete _formula;
-}
+RooFormulaVar::~RooFormulaVar() = default;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Constructor with formula expression and list of input variables.
@@ -77,9 +72,9 @@ RooFormulaVar::~RooFormulaVar()
 /// \param[in] title Title of the formula.
 /// \param[in] inFormula Expression to be evaluated.
 /// \param[in] dependents Variables that should be passed to the formula.
-/// \param[in] checkVariables Check that all variables from `dependents` are used in the expression.
+/// \param[in] checkVariables Unused parameter.
 RooFormulaVar::RooFormulaVar(const char *name, const char *title, const char* inFormula, const RooArgList& dependents,
-    bool checkVariables) :
+    bool /*checkVariables*/) :
   RooAbsReal(name,title),
   _actualVars("actualVars","Variables used by formula expression",this),
   _formExpr(inFormula)
@@ -87,9 +82,7 @@ RooFormulaVar::RooFormulaVar(const char *name, const char *title, const char* in
   if (dependents.empty()) {
     _value = traceEval(nullptr);
   } else {
-    _formula = new RooFormula(GetName(), _formExpr, dependents, checkVariables);
-    _formExpr = _formula->reindexedFormulaForUsedVars().c_str();
-    _actualVars.add(_formula->actualDependents());
+     RooFormulaUtils::initFormula(_evaluator, _formExpr, _actualVars, dependents, GetName());
   }
 }
 
@@ -101,22 +94,10 @@ RooFormulaVar::RooFormulaVar(const char *name, const char *title, const char* in
 /// \param[in] title Formula expression. Will also be used as the title.
 /// \param[in] dependents Variables that should be passed to the formula.
 /// \param[in] checkVariables Check that all variables from `dependents` are used in the expression.
-RooFormulaVar::RooFormulaVar(const char *name, const char *title, const RooArgList& dependents,
-    bool checkVariables) :
-  RooAbsReal(name,title),
-  _actualVars("actualVars","Variables used by formula expression",this),
-  _formExpr(title)
+RooFormulaVar::RooFormulaVar(const char *name, const char *title, const RooArgList &dependents, bool checkVariables)
+   : RooFormulaVar(name, title, title, dependents, checkVariables)
 {
-  if (dependents.empty()) {
-    _value = traceEval(nullptr);
-  } else {
-    _formula = new RooFormula(GetName(), _formExpr, dependents, checkVariables);
-    _formExpr = _formula->reindexedFormulaForUsedVars().c_str();
-    _actualVars.add(_formula->actualDependents());
-  }
 }
-
-
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Copy constructor
@@ -126,64 +107,44 @@ RooFormulaVar::RooFormulaVar(const RooFormulaVar& other, const char* name) :
   _actualVars("actualVars",this,other._actualVars),
   _formExpr(other._formExpr)
 {
-   for (auto const &item : other._binnings) {
-      _binnings[item.first] = std::unique_ptr<RooAbsBinning>{item.second->clone()};
+   _binnings = RooFormulaUtils::cloneBinnings(other._binnings);
+   if (other._evaluator) {
+      _evaluator = RooFormulaUtils::cloneEvaluator(*other._evaluator, GetName());
    }
-  if (other._formula && other._formula->ok()) {
-    _formula = new RooFormula(*other._formula);
-    _formExpr = _formula->reindexedFormulaForUsedVars().c_str();
-  }
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////
-/// Return reference to internal RooFormula object.
-/// If it doesn't exist, create it on the fly.
-RooFormula& RooFormulaVar::getFormula() const
+/// Return reference to the formula evaluation engine.
+/// If it doesn't exist, create it on the fly. Throws if the formula is invalid.
+RooFormulaEvaluator &RooFormulaVar::evaluator() const
 {
-  if (!_formula) {
-    // After being read from file, the formula object might not exist, yet:
-    _formula = new RooFormula(GetName(), _formExpr, _actualVars);
-    const_cast<TString &>(_formExpr) = _formula->reindexedFormulaForUsedVars().c_str();
-  }
-
-  return *_formula;
+   return RooFormulaUtils::ensureEvaluator(_evaluator, const_cast<TString &>(_formExpr), _actualVars, GetName());
 }
 
+bool RooFormulaVar::ok() const
+{
+   evaluator();
+   return true;
+}
 
-bool RooFormulaVar::ok() const { return getFormula().ok() ; }
-
-
-void RooFormulaVar::dumpFormula() { getFormula().printMultiline(std::cout, 0) ; }
-
+void RooFormulaVar::dumpFormula()
+{
+   RooFormulaUtils::printFormula(std::cout, "", _formExpr.Data(), _actualVars);
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Calculate current value of object from internal formula
 
 double RooFormulaVar::evaluate() const
 {
-  return getFormula().eval(_actualVars.nset());
+   return RooFormulaUtils::evalFormula(evaluator(), _actualVars, _actualVars.nset());
 }
 
 
 void RooFormulaVar::doEval(RooFit::EvalContext &ctx) const
 {
-   getFormula().doEval(_actualVars, ctx);
+   RooFormulaUtils::doEvalFormula(evaluator(), _actualVars, ctx);
 }
-
-
-////////////////////////////////////////////////////////////////////////////////
-/// Propagate server change information to embedded RooFormula object
-
-bool RooFormulaVar::redirectServersHook(const RooAbsCollection& newServerList, bool mustReplaceAll, bool nameChange, bool isRecursive)
-{
-  bool error = getFormula().changeDependents(newServerList,mustReplaceAll,nameChange);
-
-  _formExpr = getFormula().reindexedFormulaForUsedVars().c_str();
-  return error || RooAbsReal::redirectServersHook(newServerList, mustReplaceAll, nameChange, isRecursive);
-}
-
-
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Print info about this object to the specified stream.
@@ -194,7 +155,7 @@ void RooFormulaVar::printMultiline(ostream& os, Int_t contents, bool verbose, TS
   if(verbose) {
     indent.Append("  ");
     os << indent;
-    getFormula().printMultiline(os,contents,verbose,indent);
+    RooFormulaUtils::printFormula(os, indent, _formExpr.Data(), _actualVars);
   }
 }
 
@@ -242,34 +203,7 @@ void RooFormulaVar::writeToStream(ostream& os, bool compact) const
 
 void RooFormulaVar::setBinning(const RooAbsRealLValue &obs, const RooAbsBinning &binning, bool checkFlatness)
 {
-   // Match the observable to a formula variable by name, so that a same-named
-   // stand-in for the actual server is accepted too.
-   const int idx = _actualVars.index(obs.GetName());
-   if (idx < 0) {
-      coutE(InputArguments) << "RooFormulaVar::setBinning(" << GetName() << ") the observable " << obs.GetName()
-                            << " is not one of the formula variables of this function, nothing done." << std::endl;
-      return;
-   }
-
-   if (checkFlatness) {
-      // Sample the function by varying the actual formula variable (the server),
-      // which may be a different object than `obs` if `obs` is just a same-named
-      // stand-in: the function's value depends on the server, not on `obs`.
-      if (auto *serverObs = dynamic_cast<RooAbsRealLValue *>(_actualVars.at(idx))) {
-         std::span<const double> boundaries{binning.array(), static_cast<std::size_t>(binning.numBoundaries())};
-         if (!RooHelpers::isFunctionFlatInBins(*this, *serverObs, boundaries)) {
-            coutE(InputArguments) << "RooFormulaVar::setBinning(" << GetName() << ") the expression \"" << _formExpr
-                                  << "\" is not flat within the given bins of " << obs.GetName()
-                                  << ". The binning is not set. Pass checkFlatness=false to override this check."
-                                  << std::endl;
-            return;
-         }
-      }
-   }
-
-   // Key the binning by the observable's index in _actualVars (not its name), so
-   // that it survives a renaming of the variable or a server redirection.
-   _binnings[idx] = std::unique_ptr<RooAbsBinning>{binning.clone()};
+   RooFormulaUtils::setBinning(_binnings, *this, _actualVars, _formExpr.Data(), obs, binning, checkFlatness);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -279,8 +213,7 @@ void RooFormulaVar::setBinning(const RooAbsRealLValue &obs, const RooAbsBinning 
 
 const RooAbsBinning *RooFormulaVar::getBinning(const RooAbsRealLValue &obs) const
 {
-   auto found = _binnings.find(_actualVars.index(obs.GetName()));
-   return found != _binnings.end() ? found->second.get() : nullptr;
+   return RooFormulaUtils::getBinning(_binnings, _actualVars, obs);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -299,24 +232,7 @@ bool RooFormulaVar::removeBinning(const RooAbsRealLValue &obs)
 
 bool RooFormulaVar::isBinnedDistribution(const RooArgSet &obs) const
 {
-   if (obs.empty() || _binnings.empty()) {
-      return false;
-   }
-   for (RooAbsArg *o : obs) {
-      const int idx = _actualVars.index(o->GetName());
-      // Observables that are not formula variables of this function are ones we
-      // do not depend on: the function is constant (hence trivially binned) in
-      // them, so they must be ignored here. This matches the convention that
-      // composite functions like RooProduct rely on, where each component's
-      // isBinnedDistribution() is queried with the full observable set.
-      if (idx < 0) {
-         continue;
-      }
-      if (_binnings.find(idx) == _binnings.end()) {
-         return false;
-      }
-   }
-   return true;
+   return RooFormulaUtils::isBinnedDistribution(_binnings, _actualVars, obs);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -326,16 +242,7 @@ bool RooFormulaVar::isBinnedDistribution(const RooArgSet &obs) const
 
 std::list<double>* RooFormulaVar::binBoundaries(RooAbsRealLValue& obs, double xlo, double xhi) const
 {
-   auto found = _binnings.find(_actualVars.index(obs.GetName()));
-   if (found != _binnings.end()) {
-      const RooAbsBinning &binning = *found->second;
-      auto hint = new std::list<double>;
-      for (int i = 0; i < binning.numBoundaries(); ++i) {
-         const double boundary = binning.array()[i];
-         if (boundary >= xlo && boundary <= xhi) {
-            hint->push_back(boundary);
-         }
-      }
+   if (auto *hint = RooFormulaUtils::binBoundaries(_binnings, _actualVars, obs, xlo, xhi)) {
       return hint;
    }
 
@@ -358,9 +265,8 @@ std::list<double>* RooFormulaVar::binBoundaries(RooAbsRealLValue& obs, double xl
 
 std::list<double>* RooFormulaVar::plotSamplingHint(RooAbsRealLValue& obs, double xlo, double xhi) const
 {
-   if (const RooAbsBinning *binning = getBinning(obs)) {
-      return RooCurve::plotSamplingHintForBinBoundaries(
-         {binning->array(), static_cast<std::size_t>(binning->numBoundaries())}, xlo, xhi);
+   if (auto *hint = RooFormulaUtils::plotSamplingHint(_binnings, _actualVars, obs, xlo, xhi)) {
+      return hint;
    }
 
   for (const auto par : _actualVars) {
@@ -423,7 +329,7 @@ double RooFormulaVar::defaultErrorLevel() const
 
 std::string RooFormulaVar::getUniqueFuncName() const
 {
-   return getFormula().getTFormula()->GetUniqueFuncName().Data();
+   return evaluator().getTFormula()->GetUniqueFuncName().Data();
 }
 
 std::unique_ptr<RooAbsArg>

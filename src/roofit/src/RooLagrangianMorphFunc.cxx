@@ -34,8 +34,6 @@ describe the same process or not.
 // #define USE_UBLAS 1
 // #undef USE_UBLAS
 
-#include "Riostream.h"
-
 #include "RooAbsCollection.h"
 #include "RooArgList.h"
 #include "RooArgProxy.h"
@@ -71,7 +69,6 @@ describe the same process or not.
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
-#include <typeinfo>
 
 using std::string, std::make_unique, std::vector;
 
@@ -2935,22 +2932,6 @@ double RooLagrangianMorphFunc::analyticalIntegralWN(Int_t code, const RooArgSet 
 void RooLagrangianMorphFunc::printMetaArgs(std::ostream &os) const
 {
    return this->getFunc()->printMetaArgs(os);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-/// Retrieve the matrix of coefficients
-
-RooAbsArg::CacheMode RooLagrangianMorphFunc::canNodeBeCached() const
-{
-   return this->getFunc()->canNodeBeCached();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-/// Retrieve the matrix of coefficients
-
-void RooLagrangianMorphFunc::setCacheAndTrackHints(RooArgSet &arg)
-{
-   this->getFunc()->setCacheAndTrackHints(arg);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

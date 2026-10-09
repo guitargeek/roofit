@@ -17,6 +17,8 @@ set(CMAKE_INSTALL_LIBDIR "lib" CACHE PATH "libraries")
 
 include(GNUInstallDirs)
 
+find_package(nlohmann_json REQUIRED)
+
 # Follow the layout of the ROOT build tree: all executables in <build>/bin and
 # all libraries in <build>/lib. ROOT_GENERATE_DICTIONARY() puts the .rootmap and
 # .pcm files next to the libraries and takes care of installing them as soon as

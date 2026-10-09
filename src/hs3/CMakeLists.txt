@@ -34,8 +34,6 @@ target_sources(RooFitHS3 PRIVATE ${RELATIVE_INC_HEADERS} ${sources_cxx})
 
 target_include_directories(RooFitHS3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
-find_package(nlohmann_json REQUIRED)
-
 target_link_libraries(RooFitHS3 PRIVATE
     nlohmann_json::nlohmann_json
 )

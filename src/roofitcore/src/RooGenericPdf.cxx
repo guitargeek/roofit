@@ -23,65 +23,33 @@ Implementation of a probability density function
 that takes a RooArgList of servers and a C++ expression string defining how
 its value should be calculated from the given list of servers.
 A fully numerical integration is automatically performed to normalize the given
-expression. RooGenericPdf uses a RooFormula object to perform the expression evaluation.
-
-The string expression can be any valid TFormula expression referring to the
-listed servers either by name or by their ordinal list position. These three are
-equivalent:
-```
-  RooFormulaVar("gen", "x*y", RooArgList(x,y))       // reference by name
-  RooFormulaVar("gen", "@0*@1", RooArgList(x,y))     // reference by ordinal with @
-  RooFormulaVar("gen", "x[0]*x[1]", RooArgList(x,y)) // TFormula-builtin reference by ordinal
-```
-Note that `x[i]` is an expression reserved for TFormula. All variable references
-are automatically converted to the TFormula-native format. If a variable with
-the name `x` is given, the RooFormula interprets `x[i]` as a list position,
-but `x` without brackets as the name of a RooFit object.
-
-The last two versions, while slightly less readable, are more versatile because
-the names of the arguments are not hard coded.
+expression. The expression syntax is the same as for RooFormulaVar; see its
+class documentation.
 **/
 
 #include "RooGenericPdf.h"
-#include "Riostream.h"
-#include "RooStreamParser.h"
 #include "RooMsgService.h"
 #include "RooArgList.h"
-#include "RooFormula.h"
+#include "RooFormulaUtils.h"
 #include "RooAbsRealLValue.h"
-#include "RooAbsBinning.h"
-#include "RooCurve.h"
-#include "RooFitImplHelpers.h"
 
+#include "TFormula.h"
+
+#include <iostream>
 using std::istream, std::ostream, std::endl;
 
 
 RooGenericPdf::RooGenericPdf() {}
 
-RooGenericPdf::~RooGenericPdf()
-{
-   if(_formula) delete _formula;
-}
-
+RooGenericPdf::~RooGenericPdf() = default;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Constructor with formula expression and list of input variables
 
-RooGenericPdf::RooGenericPdf(const char *name, const char *title, const RooArgList& dependents) :
-  RooAbsPdf(name,title),
-  _actualVars("actualVars","Variables used by PDF expression",this),
-  _formExpr(title)
+RooGenericPdf::RooGenericPdf(const char *name, const char *title, const RooArgList &dependents)
+   : RooGenericPdf(name, title, title, dependents)
 {
-  if (dependents.empty()) {
-    _value = traceEval(nullptr);
-  } else {
-    _formula = new RooFormula(GetName(), _formExpr, dependents);
-    _formExpr = _formula->reindexedFormulaForUsedVars().c_str();
-    _actualVars.add(_formula->actualDependents());
-  }
 }
-
-
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Constructor with a name, title, formula expression and a list of variables
@@ -95,9 +63,7 @@ RooGenericPdf::RooGenericPdf(const char *name, const char *title,
   if (dependents.empty()) {
     _value = traceEval(nullptr);
   } else {
-    _formula = new RooFormula(GetName(), _formExpr, dependents);
-    _formExpr = _formula->reindexedFormulaForUsedVars().c_str();
-    _actualVars.add(_formula->actualDependents());
+     RooFormulaUtils::initFormula(_evaluator, _formExpr, _actualVars, dependents, GetName());
   }
 }
 
@@ -111,22 +77,19 @@ RooGenericPdf::RooGenericPdf(const RooGenericPdf& other, const char* name) :
   _actualVars("actualVars",this,other._actualVars),
   _formExpr(other._formExpr)
 {
-   for (auto const &item : other._binnings) {
-      _binnings[item.first] = std::unique_ptr<RooAbsBinning>{item.second->clone()};
+   _binnings = RooFormulaUtils::cloneBinnings(other._binnings);
+   if (other._evaluator) {
+      _evaluator = RooFormulaUtils::cloneEvaluator(*other._evaluator, GetName());
    }
-  formula();
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////
+/// Return reference to the formula evaluation engine.
+/// If it doesn't exist, create it on the fly. Throws if the formula is invalid.
 
-RooFormula& RooGenericPdf::formula() const
+RooFormulaEvaluator &RooGenericPdf::evaluator() const
 {
-  if (!_formula) {
-    _formula = new RooFormula(GetName(),_formExpr.Data(),_actualVars);
-    const_cast<TString &>(_formExpr) = _formula->reindexedFormulaForUsedVars().c_str();
-  }
-  return *_formula ;
+   return RooFormulaUtils::ensureEvaluator(_evaluator, const_cast<TString &>(_formExpr), _actualVars, GetName());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -146,34 +109,7 @@ RooFormula& RooGenericPdf::formula() const
 
 void RooGenericPdf::setBinning(const RooAbsRealLValue &obs, const RooAbsBinning &binning, bool checkFlatness)
 {
-   // Match the observable to a formula variable by name, so that a same-named
-   // stand-in for the actual server is accepted too.
-   const int idx = _actualVars.index(obs.GetName());
-   if (idx < 0) {
-      coutE(InputArguments) << "RooGenericPdf::setBinning(" << GetName() << ") the observable " << obs.GetName()
-                            << " is not one of the formula variables of this pdf, nothing done." << std::endl;
-      return;
-   }
-
-   if (checkFlatness) {
-      // Sample the function by varying the actual formula variable (the server),
-      // which may be a different object than `obs` if `obs` is just a same-named
-      // stand-in: the function's value depends on the server, not on `obs`.
-      if (auto *serverObs = dynamic_cast<RooAbsRealLValue *>(_actualVars.at(idx))) {
-         std::span<const double> boundaries{binning.array(), static_cast<std::size_t>(binning.numBoundaries())};
-         if (!RooHelpers::isFunctionFlatInBins(*this, *serverObs, boundaries)) {
-            coutE(InputArguments) << "RooGenericPdf::setBinning(" << GetName() << ") the expression \"" << _formExpr
-                                  << "\" is not flat within the given bins of " << obs.GetName()
-                                  << ". The binning is not set. Pass checkFlatness=false to override this check."
-                                  << std::endl;
-            return;
-         }
-      }
-   }
-
-   // Key the binning by the observable's index in _actualVars (not its name), so
-   // that it survives a renaming of the variable or a server redirection.
-   _binnings[idx] = std::unique_ptr<RooAbsBinning>{binning.clone()};
+   RooFormulaUtils::setBinning(_binnings, *this, _actualVars, _formExpr.Data(), obs, binning, checkFlatness);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -183,8 +119,7 @@ void RooGenericPdf::setBinning(const RooAbsRealLValue &obs, const RooAbsBinning 
 
 const RooAbsBinning *RooGenericPdf::getBinning(const RooAbsRealLValue &obs) const
 {
-   auto found = _binnings.find(_actualVars.index(obs.GetName()));
-   return found != _binnings.end() ? found->second.get() : nullptr;
+   return RooFormulaUtils::getBinning(_binnings, _actualVars, obs);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -203,24 +138,7 @@ bool RooGenericPdf::removeBinning(const RooAbsRealLValue &obs)
 
 bool RooGenericPdf::isBinnedDistribution(const RooArgSet &obs) const
 {
-   if (obs.empty() || _binnings.empty()) {
-      return false;
-   }
-   for (RooAbsArg *o : obs) {
-      const int idx = _actualVars.index(o->GetName());
-      // Observables that are not formula variables of this pdf are ones we do
-      // not depend on: the function is constant (hence trivially binned) in
-      // them, so they must be ignored here. This matches the convention that
-      // composite functions like RooProduct rely on, where each component's
-      // isBinnedDistribution() is queried with the full observable set.
-      if (idx < 0) {
-         continue;
-      }
-      if (_binnings.find(idx) == _binnings.end()) {
-         return false;
-      }
-   }
-   return true;
+   return RooFormulaUtils::isBinnedDistribution(_binnings, _actualVars, obs);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -229,19 +147,7 @@ bool RooGenericPdf::isBinnedDistribution(const RooArgSet &obs) const
 
 std::list<double> *RooGenericPdf::binBoundaries(RooAbsRealLValue &obs, double xlo, double xhi) const
 {
-   auto found = _binnings.find(_actualVars.index(obs.GetName()));
-   if (found == _binnings.end()) {
-      return nullptr;
-   }
-   const RooAbsBinning &binning = *found->second;
-   auto hint = new std::list<double>;
-   for (int i = 0; i < binning.numBoundaries(); ++i) {
-      const double boundary = binning.array()[i];
-      if (boundary >= xlo && boundary <= xhi) {
-         hint->push_back(boundary);
-      }
-   }
-   return hint;
+   return RooFormulaUtils::binBoundaries(_binnings, _actualVars, obs, xlo, xhi);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -251,12 +157,7 @@ std::list<double> *RooGenericPdf::binBoundaries(RooAbsRealLValue &obs, double xl
 
 std::list<double> *RooGenericPdf::plotSamplingHint(RooAbsRealLValue &obs, double xlo, double xhi) const
 {
-   const RooAbsBinning *binning = getBinning(obs);
-   if (!binning) {
-      return nullptr;
-   }
-   return RooCurve::plotSamplingHintForBinBoundaries(
-      {binning->array(), static_cast<std::size_t>(binning->numBoundaries())}, xlo, xhi);
+   return RooFormulaUtils::plotSamplingHint(_binnings, _actualVars, obs, xlo, xhi);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -264,27 +165,15 @@ std::list<double> *RooGenericPdf::plotSamplingHint(RooAbsRealLValue &obs, double
 
 double RooGenericPdf::evaluate() const
 {
-  return formula().eval(_actualVars.nset()) ;
+   return RooFormulaUtils::evalFormula(evaluator(), _actualVars, _actualVars.nset());
 }
 
 
 ////////////////////////////////////////////////////////////////////////////////
 void RooGenericPdf::doEval(RooFit::EvalContext & ctx) const
 {
-  formula().doEval(_actualVars, ctx);
+   RooFormulaUtils::doEvalFormula(evaluator(), _actualVars, ctx);
 }
-
-
-////////////////////////////////////////////////////////////////////////////////
-/// Propagate server changes to embedded formula object
-
-bool RooGenericPdf::redirectServersHook(const RooAbsCollection& newServerList, bool mustReplaceAll, bool nameChange, bool isRecursive)
-{
-  bool error = _formula ? _formula->changeDependents(newServerList,mustReplaceAll,nameChange) : true;
-  return error || RooAbsPdf::redirectServersHook(newServerList, mustReplaceAll, nameChange, isRecursive);
-}
-
-
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Print info about this object to the specified stream.
@@ -296,7 +185,7 @@ void RooGenericPdf::printMultiline(ostream& os, Int_t content, bool verbose, TSt
     os << " --- RooGenericPdf --- " << std::endl ;
     indent.Append("  ");
     os << indent ;
-    formula().printMultiline(os,content,verbose,indent);
+    RooFormulaUtils::printFormula(os, indent, _formExpr.Data(), _actualVars);
   }
 }
 
@@ -310,9 +199,10 @@ void RooGenericPdf::printMetaArgs(ostream& os) const
   os << "formula=\"" << _formExpr << "\" " ;
 }
 
-
-void RooGenericPdf::dumpFormula() { formula().printMultiline(std::cout, 0) ; }
-
+void RooGenericPdf::dumpFormula()
+{
+   RooFormulaUtils::printFormula(std::cout, "", _formExpr.Data(), _actualVars);
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Read object contents from given stream
@@ -338,5 +228,5 @@ void RooGenericPdf::writeToStream(ostream& os, bool compact) const
 
 std::string RooGenericPdf::getUniqueFuncName() const
 {
-   return formula().getTFormula()->GetUniqueFuncName().Data();
+   return evaluator().getTFormula()->GetUniqueFuncName().Data();
 }

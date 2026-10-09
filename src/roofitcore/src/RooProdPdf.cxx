@@ -1504,11 +1504,16 @@ Int_t RooProdPdf::getGenerator(const RooArgSet& directVars, RooArgSet &generateV
 
 
   if (!generateVars.empty()) {
-    Int_t masterCode = _genCode.store(code) ;
-    return masterCode+1 ;
-  } else {
-    return 0 ;
+    auto found = std::find(_genCode.begin(), _genCode.end(), code);
+    // If a generator for the codes was already cached, return the index to the
+    // corresponding caching index plus one.
+    if (found != _genCode.end()) {
+       return std::distance(_genCode.begin(), found) + 1;
+    }
+    _genCode.emplace_back(std::move(code));
+    return _genCode.size();
   }
+  return 0;
 }
 
 
@@ -1521,7 +1526,7 @@ void RooProdPdf::initGenerator(Int_t code)
 {
   if (!_useDefaultGen) return ;
 
-  const std::vector<Int_t>& codeList = _genCode.retrieve(code-1) ;
+  const std::vector<int>& codeList = _genCode[code-1];
   Int_t i(0) ;
   for (auto* pdf : static_range_cast<RooAbsPdf*>(_pdfList)) {
     if (codeList[i]!=0) {
@@ -1542,7 +1547,7 @@ void RooProdPdf::generateEvent(Int_t code)
 {
   if (!_useDefaultGen) return ;
 
-  const std::vector<Int_t>& codeList = _genCode.retrieve(code-1) ;
+  const std::vector<Int_t>& codeList = _genCode[code-1];
   Int_t i(0) ;
   for (auto* pdf : static_range_cast<RooAbsPdf*>(_pdfList)) {
     if (codeList[i]!=0) {
@@ -1888,36 +1893,6 @@ std::list<double>* RooProdPdf::binBoundaries(RooAbsRealLValue& obs, double xlo, 
 }
 
 
-////////////////////////////////////////////////////////////////////////////////
-/// Label OK'ed components of a RooProdPdf with cache-and-track, _and_ label all RooProdPdf
-/// descendants with extra information about (conditional) normalization, needed to be able
-/// to Cache-And-Track them outside the RooProdPdf context.
-
-void RooProdPdf::setCacheAndTrackHints(RooArgSet& trackNodes)
-{
-  for (const auto parg : _pdfList) {
-
-    if (parg->canNodeBeCached()==Always) {
-      trackNodes.add(*parg) ;
-
-      // Additional processing to fix normalization sets in case product defines conditional observables
-      if (RooArgSet* pdf_nset = findPdfNSet(static_cast<RooAbsPdf&>(*parg))) {
-        // Check if conditional normalization is specified
-        using RooHelpers::getColonSeparatedNameString;
-        if (string("nset")==pdf_nset->GetName() && !pdf_nset->empty()) {
-          parg->setStringAttribute("CATNormSet",getColonSeparatedNameString(*pdf_nset).c_str()) ;
-        }
-        if (string("cset")==pdf_nset->GetName()) {
-          parg->setStringAttribute("CATCondSet",getColonSeparatedNameString(*pdf_nset).c_str()) ;
-        }
-      } else {
-        coutW(Optimization) << "RooProdPdf::setCacheAndTrackHints(" << GetName() << ") WARNING product pdf does not specify a normalization set for component " << parg->GetName() << std::endl ;
-      }
-    }
-  }
-}
-
-
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Customized printing of arguments of a RooProdPdf to more intuitively reflect the contents of the
@@ -2061,6 +2036,43 @@ RooProdPdf::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileC
    std::unique_ptr<RooProdPdf> prodPdfClone{static_cast<RooProdPdf *>(this->Clone())};
    ctx.markAsCompiled(*prodPdfClone);
 
+   // If this RooProdPdf has a normalization range (e.g. the fit range in a
+   // ranged fit), propagate it to the component pdfs while they are compiled,
+   // so that a nested RooAddPdf reinterprets its coefficients with respect to
+   // the full range exactly like a top-level RooAddPdf would. Otherwise, a
+   // RooProdPdf wrapping an extended RooAddPdf (the common way to attach
+   // constraint terms) gives a different yield than the bare RooAddPdf in a
+   // ranged fit (GitHub issue #16673).
+   //
+   // This must not change how constraint terms are normalized, so the range is
+   // only set on components whose normalization observables define it.
+   // Constraint pdfs are normalized over the nuisance parameters, which don't
+   // define the fit range, so they are skipped. Forcing the range on them would
+   // be wrong, and for a multi-range fit it even throws, because each undefined
+   // sub-range falls back to the parameter's full range and the sub-ranges then
+   // overlap.
+   std::vector<std::pair<RooAbsPdf *, std::string>> restoreNormRanges;
+   if (const char *prodNormRange = normRange()) {
+      std::vector<std::string> rangeTokens = ROOT::Split(prodNormRange, ",", /*skipEmpty=*/true);
+      for (auto *pdf : static_range_cast<RooAbsPdf *>(prodPdfClone->_pdfList)) {
+         RooArgSet pdfObs;
+         pdf->getObservables(&normSet, pdfObs);
+         bool rangeDefined = !pdfObs.empty();
+         for (RooAbsArg *obs : pdfObs) {
+            auto *lval = dynamic_cast<RooAbsRealLValue *>(obs);
+            for (auto const &token : rangeTokens) {
+               if (!lval || !lval->hasRange(token.c_str())) {
+                  rangeDefined = false;
+               }
+            }
+         }
+         if (rangeDefined && std::string(pdf->normRange() ? pdf->normRange() : "") != prodNormRange) {
+            restoreNormRanges.emplace_back(pdf, pdf->normRange() ? pdf->normRange() : "");
+            pdf->setNormRange(prodNormRange);
+         }
+      }
+   }
+
    for (const auto server : prodPdfClone->servers()) {
       auto nsetForServer = fillNormSetForServer(normSet, *server);
       RooArgSet const &nset = nsetForServer ? *nsetForServer : normSet;
@@ -2071,7 +2083,18 @@ RooProdPdf::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileC
       ctx.compileServer(*server, *prodPdfClone, depList);
    }
 
-   auto fixedProdPdf = std::make_unique<RooFit::Detail::RooFixedProdPdf>(std::move(prodPdfClone), normSet);
+   for (auto const &[pdf, oldRange] : restoreNormRanges) {
+      pdf->setNormRange(oldRange.empty() ? nullptr : oldRange.c_str());
+   }
+
+   // The RooFixedProdPdf keeps the normalization set around to create its
+   // cache elements and to evaluate the expected number of events. It must
+   // refer to the observables in the compiled computation graph, because the
+   // original ones can get out of sync with it: RooSimultaneous prefixes the
+   // observable names of each channel after compilation, and the stale
+   // observables would then not be found anymore by name.
+   auto fixedProdPdf =
+      std::make_unique<RooFit::Detail::RooFixedProdPdf>(std::move(prodPdfClone), ctx.mapToCompiled(normSet));
    ctx.markAsCompiled(*fixedProdPdf);
 
    return fixedProdPdf;

@@ -9,7 +9,9 @@
 # @author Pere Mato, CERN
 ############################################################################
 
-if(roofit_multiprocess)
+# In the ROOT build, this is `if(NOT WIN32)`. RooFit::MultiProcess is not built
+# in this standalone repository yet, so we check for its target instead.
+if(TARGET RooFitMultiProcess)
   set(RooFitMPTestStatisticsSources
     src/TestStatistics/LikelihoodGradientJob.cxx
     src/TestStatistics/LikelihoodJob.cxx
@@ -17,7 +19,6 @@ if(roofit_multiprocess)
   )
   set(RooFitMPTestStatisticsHeaders
     src/TestStatistics/LikelihoodGradientJob.h
-    src/TestStatistics/ConstantTermsOptimizer.h
     src/TestStatistics/LikelihoodSerial.h
     src/TestStatistics/MinuitFcnGrad.h
     src/TestStatistics/LikelihoodJob.h
@@ -353,7 +354,7 @@ set(sources_cxx
     src/RooFitLegacy/RooCatTypeLegacy.cxx
     src/RooFitResult.cxx
     src/RooFoamGenerator.cxx
-    src/RooFormula.cxx
+    src/RooFormulaUtils.cxx
     src/RooFormulaVar.cxx
     src/RooFracRemainder.cxx
     src/RooFunctor.cxx
@@ -440,6 +441,7 @@ set(sources_cxx
     src/RooStudyManager.cxx
     src/RooStudyPackage.cxx
     src/RooSuperCategory.cxx
+    src/RooTFormulaEvaluator.cxx
     src/RooTObjWrap.cxx
     src/RooThresholdCategory.cxx
     src/RooTrace.cxx
@@ -450,7 +452,6 @@ set(sources_cxx
     src/RooVectorDataStore.cxx
     src/RooWorkspace.cxx
     src/RooWrapperPdf.cxx
-    src/TestStatistics/ConstantTermsOptimizer.cxx
     src/TestStatistics/LikelihoodGradientWrapper.cxx
     src/TestStatistics/LikelihoodSerial.cxx
     src/TestStatistics/LikelihoodWrapper.cxx
@@ -499,13 +500,17 @@ install(TARGETS RooFitCore
 )
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
+# Minuit2 is needed in the implementation of RooMinimizerFcn, to advertise
+# vanishing second derivatives to Minuit2Minimizer.
+target_link_libraries(RooFitCore PRIVATE Minuit2)
+
 # The following definitions are PUBLIC so they can also be used in ROOT-internal tests
 
 if(roofit_legacy_eval_backend)
   target_compile_definitions(RooFitCore PUBLIC ROOFIT_LEGACY_EVAL_BACKEND)
 endif()
 
-if(roofit_multiprocess)
+if(TARGET RooFitMultiProcess)
   target_compile_definitions(RooFitCore PUBLIC ROOFIT_MULTIPROCESS)
 endif()
 
@@ -528,6 +533,9 @@ if(fftw3)
   endif()
   target_link_libraries(RooFitCore PRIVATE FFTW::Double)
 endif()
+
+# Used to silence deprecation warnings when testing deprecated features
+target_compile_definitions(RooFitCore PUBLIC ROOFIT_BUILDS_ITSELF)
 
 target_include_directories(RooFitCore PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/res>)
 
@@ -554,7 +562,9 @@ if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
           inc/LinkDef.h
           inc/RooFit/UniqueId.h # Was not being included in ROOT_STL_PACKAGE call
           src/RooConvIntegrandBinding.h
-          src/RooFormula.h
+          src/RooFormulaUtils.h
+          src/RooFormulaEvaluator.h
+          src/RooTFormulaEvaluator.h
           src/RooFitLegacy/RooAbsCategoryLegacyIterator.h
           src/RooMCIntegrator.h
           src/RooFoamGenerator.h

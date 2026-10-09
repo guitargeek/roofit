@@ -57,3 +57,7 @@ if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
           inc/RooFit/CodegenImpl.h
   )
 endif()
+
+if(testing)
+  add_subdirectory(test)
+endif()

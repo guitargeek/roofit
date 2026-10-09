@@ -13,6 +13,7 @@ ROOT_ADD_GTEST(testRooFit
     testRooCrystalBall.cxx
     testRooExponential.cxx
     testRooGaussian.cxx
+    testRooIntegralMorph.cxx
     testRooJohnson.cxx
     testRooKeysPdf.cxx
     testRooLandau.cxx
@@ -40,7 +41,7 @@ endif()
 
 add_subdirectory(vectorisedPDFs)
 
-if(tmva-sofie)
+if(tmva)
   ROOT_FIND_PYTHON_MODULE(torch)
   ROOT_FIND_PYTHON_MODULE(onnx)
 

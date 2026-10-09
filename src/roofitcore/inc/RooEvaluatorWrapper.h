@@ -36,7 +36,7 @@ class RooFuncWrapper;
 class RooEvaluatorWrapper final : public RooAbsReal {
 public:
    RooEvaluatorWrapper(RooAbsReal &topNode, RooAbsData *data, bool useGPU, std::string const &rangeName,
-                       RooAbsPdf const *simPdf, bool takeGlobalObservablesFromData);
+                       RooAbsPdf const *simPdf, bool takeGlobalObservablesFromData, int nWorkers = 1);
 
    RooEvaluatorWrapper(const RooEvaluatorWrapper &other, const char *name = nullptr);
 
@@ -54,9 +54,6 @@ public:
 
    void applyWeightSquared(bool flag) override { _topNode->applyWeightSquared(flag); }
 
-   /// The RooFit::Evaluator is dealing with constant terms itself.
-   void constOptimizeTestStatistic(ConstOpCode /*opcode*/, bool /*doAlsoTrackingOpt*/) override {}
-
    bool hasGradient() const override;
    bool hasHessian() const override;
 
@@ -72,6 +69,9 @@ public:
    std::unique_ptr<ChangeOperModeRAII> setOperModes(RooAbsArg::OperMode opMode);
 
    RooFit::Evaluator &evaluator() const { return *_evaluator; }
+
+   /// The RooFit object that this wrapper evaluates.
+   RooAbsReal const &topNode() const { return *_topNode; }
 
 protected:
    double evaluate() const override;

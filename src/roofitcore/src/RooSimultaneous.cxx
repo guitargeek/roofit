@@ -976,7 +976,18 @@ RooSimultaneous::createAsymmetryComponent(const RooAbsCategoryLValue &asymCat, c
 void RooSimultaneous::selectNormalization(const RooArgSet* normSet, bool /*force*/)
 {
   _plotCoefNormSet.removeAll() ;
-  if (normSet) _plotCoefNormSet.add(*normSet) ;
+  if (normSet) {
+     // The index category must not be stored in the set: it is meaningless for
+     // the coefficient normalization, since it is never an observable of the
+     // component pdfs (RooAddPdf::selectNormalization() would filter it out
+     // again anyway). Worse, it is already registered as a value server via
+     // the index category proxy, and registering the same server a second
+     // time through this non-propagating set proxy corrupts the reference
+     // counts of the server's client lists when the set is cleared again.
+     RooArgSet filteredNormSet{*normSet};
+     filteredNormSet.remove(_indexCat.arg(), true, true);
+     _plotCoefNormSet.add(filteredNormSet);
+  }
 }
 
 
@@ -1239,6 +1250,22 @@ RooArgSet const& RooSimultaneous::flattenedCatList() const
    return *_indexCatSet;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/// Check if the index category is among the variables `vars`, matching by
+/// name. For a RooSuperCategory index, any of its input categories counts.
+///
+/// If the index category is not among the observables of a fit, this
+/// RooSimultaneous does not split the data into channels: it acts as a
+/// "switch" that evaluates to the component selected by the current index
+/// state, analogous to RooMultiPdf. Fitting infrastructure uses this check to
+/// decide between the two modes.
+bool RooSimultaneous::indexCatIsObservable(RooArgSet const &vars) const
+{
+   RooArgSet catsAmongVars;
+   vars.selectCommon(flattenedCatList(), catsAmongVars);
+   return !catsAmongVars.empty();
+}
+
 namespace {
 
 void markObs(RooAbsArg *arg, std::string const &prefix, RooArgSet const &normSet)
@@ -1273,6 +1300,17 @@ void prefixArgs(RooAbsArg *arg, std::string const &prefix, RooArgSet const &norm
 std::unique_ptr<RooAbsArg>
 RooSimultaneous::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileContext &ctx) const
 {
+   if (!indexCatIsObservable(normSet)) {
+      // The index category is not an observable here: the RooSimultaneous
+      // acts as a plain "switch" that evaluates to the component selected by
+      // the current index state, analogous to RooMultiPdf. The channel
+      // observables are then the same as the ones of this pdf, so the
+      // channel-splitting compilation below (which renames the per-channel
+      // observables so they can be filled from split datasets) must not be
+      // used. Compile like an ordinary self-normalized pdf instead.
+      return RooAbsPdf::compileForNormSet(normSet, ctx);
+   }
+
    std::unique_ptr<RooSimultaneous> newSimPdf{static_cast<RooSimultaneous *>(this->Clone())};
 
    const char *rangeName = this->getStringAttribute("RangeName");
@@ -1307,6 +1345,12 @@ RooSimultaneous::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::Com
       pdfContext.setLikelihoodMode(ctx.likelihoodMode());
       auto *pdfFinal = pdfContext.compile(*pdfClone, *newSimPdf, *pdfNormSet);
 
+      // The observables of the compiled computation graph are clones of the
+      // ones in `pdfNormSet`, and only the clones are prefixed below. That's
+      // why we have to translate the normalization set to the compiled args
+      // before using it any further.
+      RooArgSet compiledPdfNormSet = pdfContext.mapToCompiled(*pdfNormSet);
+
       // We can only prefix the observables after everything related the
       // compiling of the compute graph for the normalization set is done. This
       // is because of a subtlety in conditional RooProdPdfs, which stores the
@@ -1316,7 +1360,12 @@ RooSimultaneous::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::Com
       // but this has more performance overhead.
       prefixArgs(pdfFinal, prefix, normSet);
 
-      pdfFinal->fixAddCoefNormalization(*pdfNormSet, false);
+      // This has to be done with the observables of the compiled graph, which
+      // are prefixed at this point. Otherwise, the RooAddPdf components don't
+      // find their coefficient normalization observables and silently keep the
+      // default "automatic" interpretation of the coefficients, which results
+      // in wrong yields in ranged fits (GitHub issue #23444).
+      pdfFinal->fixAddCoefNormalization(compiledPdfNormSet, false);
 
       pdfClone->SetName((std::string("_") + pdfClone->GetName()).c_str());
       pdfFinal->addOwnedComponents(std::move(pdfClone));

@@ -856,7 +856,9 @@ double RooAbsPdf::extendedTerm(RooAbsData const& data, bool weightSquared, bool 
  *                          This backend re-uses code from the **cpu** backend, but compiled in CUDA kernels.
  *                          Hence, the results are expected to be identical, modulo some numerical differences that can arise from the different order in which the GPU is summing the log probabilities.
  *                          This backend can drastically speed up the fit if all RooAbsArg object in the model support it.
- *   <tr><td> **legacy** <td> The original likelihood evaluation method.
+ *   <tr><td> **legacy** <td> \deprecated The original likelihood evaluation method.
+ *                            It is deprecated and will be removed in ROOT 6.44, together with the deprecated BatchMode() command argument
+ *                            (where the legacy backend corresponded to `BatchMode("off")`).
  *                            Evaluates the PDF for each single data entry at a time before summing the negative log probabilities.
  *                            It supports multi-threading, but you might need more than 20 threads to maybe see about 10% performance gain over the default cpu-backend (that runs currently only on a single thread).
  *   <tr><td> **codegen** <td> **Experimental** - Generates and compiles minimal C++ code for the NLL on-the-fly and wraps it in the returned RooAbsReal.
@@ -914,11 +916,9 @@ double RooAbsPdf::extendedTerm(RooAbsData const& data, bool weightSquared, bool 
  *                                                 - precision = 0: Activate bin integration only for continuous PDFs fit to a RooDataHist.
  *                                                 - precision < 0: Deactivate.
  *                                                 \see RooBinSamplingPdf
- * <tr><td> `ModularL(bool flag)`           <td>  Enable or disable modular likelihoods, which will become the default in a future release.
- *                                                This does not change any user-facing code, but only enables a different likelihood class in the back-end. Note that this
- *                                                should be set to true for parallel minimization of likelihoods!
- *                                                Note that it is currently not recommended to use Modular likelihoods without any parallelization enabled in the minimization, since
- *                                                some features such as offsetting might not yet work in this case.
+ * <tr><td> `ModularL(bool flag)`           <td>  Enables usage of a modular likelihood class in the back-end that is required for the **experimental** parallel minimization of likelihoods.
+ *                                                Note that it is currently *not recommended* to use Modular likelihoods without any parallelization enabled in the minimization,
+ *                                                since many features do not work (for example some ranged fits, offsetting, external constraints, or conditional pdfs).
  * </table>
  */
 
@@ -1040,12 +1040,13 @@ std::unique_ptr<RooAbsReal> RooAbsPdf::createNLLImpl(RooAbsData &data, const Roo
  *                                                                                                      The second argument determines the internal partial derivative calculation
  *                                                                                                      ordering strategy. The third argument determines the number of partial
  *                                                                                                      derivatives that are executed per task package on each worker.
- * <tr><td> `ParallelDescentOptions(bool enable=false, int splitStrategy=0, int numSplits=4)`   <td>  **Experimental** - Control settings related to the parallelization of likelihoods
+ * <tr><td> `ParallelDescentOptions(bool enable=false, int splitStrategy=0, int numSplits=0)`   <td>  **Experimental** - Control settings related to the parallelization of likelihoods
  *                                                                                                      outside of the gradient calculation but in the minimization, most prominently
  *                                                                                                      in the linesearch step. The first argument this disables or enables likelihood
- *                                                                                                      parallelization. The second argument determines whether to split the task batches
- *                                                                                                      per event or per likelihood component. And the third argument how many events or
- *                                                                                                      respectively components to include in each batch.
+ *                                                                                                      parallelization. The second argument determines whether to split the tasks in
+ *                                                                                                      blocks of events (0) or per likelihood component (1). And the third argument
+ *                                                                                                      determines into how many tasks to split the likelihood, where the default of
+ *                                                                                                      zero keeps the automatic task-splitting settings of `RooFit::MultiProcess`.
  * <tr><td> `TimingAnalysis(bool flag)`   <td> **Experimental** - Log timings. This feature logs timings with NewStyle likelihoods on multiple processes simultaneously
  *                                         and outputs the timings at the end of a run to json log files, which can be analyzed with the
  *                                         `RooFit::MultiProcess::HeatmapAnalyzer`. Only works with simultaneous likelihoods.

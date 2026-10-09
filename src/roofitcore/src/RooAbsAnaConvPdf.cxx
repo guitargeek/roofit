@@ -99,7 +99,6 @@
 
 #include "RooFit/Detail/RooNormalizedPdf.h"
 #include "RooMsgService.h"
-#include "Riostream.h"
 #include "RooResolutionModel.h"
 #include "RooRealVar.h"
 #include "RooFormulaVar.h"
@@ -139,7 +138,6 @@ RooAbsAnaConvPdf::RooAbsAnaConvPdf(const char *name, const char *title, const Ro
      _coefNormMgr(this, 10),
      _codeReg(10)
 {
-   _model->setAttribute("NOCacheAndTrack");
 }
 
 
@@ -158,7 +156,6 @@ RooAbsAnaConvPdf::RooAbsAnaConvPdf(const RooAbsAnaConvPdf &other, const char *na
 {
   // Copy constructor
   if (_model) {
-     _model->setAttribute("NOCacheAndTrack");
   }
   other._basisList.snapshot(_basisList);
 }
@@ -267,7 +264,6 @@ Int_t RooAbsAnaConvPdf::declareBasis(const char* expression, const RooArgList& p
 
   auto basisFunc = std::make_unique<RooFormulaVar>(basisName, expression, basisArgs);
   basisFunc->setAttribute("RooWorkspace::Recycle") ;
-  basisFunc->setAttribute("NOCacheAndTrack") ;
   basisFunc->setOperMode(operMode()) ;
 
   // Instantiate resModel x basisFunc convolution
@@ -319,7 +315,6 @@ bool RooAbsAnaConvPdf::changeModel(const RooResolutionModel& newModel)
   }
   _model = static_cast<RooResolutionModel *>(newModel.clone(newModel.GetName()));
   _ownModel = true;
-  _model->setAttribute("NOCacheAndTrack");
 
   return false ;
 }
@@ -506,10 +501,10 @@ Int_t RooAbsAnaConvPdf::getAnalyticalIntegralWN(RooArgSet& allVars,
 
   // takes ownership of all sets
   masterCode = _codeReg.store(tmp,
-                              intCoefSet.release(),
-                              intConvSet.release(),
-                              normCoefSet.release(),
-                              normConvSet.release()) + 1;
+                              intCoefSet.get(),
+                              intConvSet.get(),
+                              normCoefSet.get(),
+                              normConvSet.get()) + 1;
 
   analVars.add(allDeps) ;
 
@@ -556,11 +551,11 @@ double RooAbsAnaConvPdf::analyticalIntegralWN(Int_t code, const RooArgSet *normS
       return getVal(normSet);
 
    // Unpack master code
-   RooArgSet *intCoefSet;
-   RooArgSet *intConvSet;
-   RooArgSet *normCoefSet;
-   RooArgSet *normConvSet;
-   _codeReg.retrieve(code - 1, intCoefSet, intConvSet, normCoefSet, normConvSet);
+   auto retrieved = _codeReg.retrieve(code - 1);
+   RooArgSet *intCoefSet = retrieved.sets[0];
+   RooArgSet *intConvSet = retrieved.sets[1];
+   RooArgSet *normCoefSet = retrieved.sets[2];
+   RooArgSet *normConvSet = retrieved.sets[3];
 
    Int_t index(0);
 
@@ -732,18 +727,6 @@ void RooAbsAnaConvPdf::printMultiline(ostream& os, Int_t contents, bool verbose,
   }
 }
 
-
-///////////////////////////////////////////////////////////////////////////////
-/// Label OK'ed components with cache-and-track
-void RooAbsAnaConvPdf::setCacheAndTrackHints(RooArgSet& trackNodes)
-{
-  for (auto const* carg : static_range_cast<RooAbsArg*>(_convSet)) {
-    if (carg->canNodeBeCached()==Always) {
-      trackNodes.add(*carg) ;
-      //cout << "tracking node RooAddPdf component " << carg->ClassName() << "::" << carg->GetName() << std::endl ;
-    }
-  }
-}
 
 std::unique_ptr<RooAbsArg>
 RooAbsAnaConvPdf::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileContext &ctx) const
