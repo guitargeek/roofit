@@ -79,18 +79,16 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   target_compile_options(RooFitMore PUBLIC -fno-math-errno)
 endif()
 
-if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
-  target_sources(
-      RooFitMore
-      PRIVATE
-      FILE_SET private_header_files
-      TYPE HEADERS
-      BASE_DIRS inc/ src/
-      FILES
-          ${RELATIVE_INC_HEADERS}
-          inc/LinkDef.h
-          src/BracketAdapters.h
-          src/RooAdaptiveGaussKronrodIntegrator1D.h
-          src/RooGaussKronrodIntegrator1D.h
-  )
-endif()
+target_sources(
+    RooFitMore
+    PRIVATE
+    FILE_SET private_header_files
+    TYPE HEADERS
+    BASE_DIRS inc/ src/
+    FILES
+        ${RELATIVE_INC_HEADERS}
+        inc/LinkDef.h
+        src/BracketAdapters.h
+        src/RooAdaptiveGaussKronrodIntegrator1D.h
+        src/RooGaussKronrodIntegrator1D.h
+)

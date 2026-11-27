@@ -116,7 +116,20 @@ void codegenImpl(RooLognormal &arg, CodegenContext &ctx);
 void codegenImpl(RooMultiPdf &arg, CodegenContext &ctx);
 void codegenImpl(RooMultiVarGaussian &arg, CodegenContext &ctx);
 void codegenImpl(RooONNXFunc &arg, CodegenContext &ctx);
+// Support for the deprecated RooParamHistFunc, to be removed in ROOT 6.46
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 void codegenImpl(RooParamHistFunc &arg, CodegenContext &ctx);
+#ifdef _MSC_VER
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
 void codegenImpl(RooPoisson &arg, CodegenContext &ctx);
 void codegenImpl(RooPolyVar &arg, CodegenContext &ctx);
 void codegenImpl(RooPolynomial &arg, CodegenContext &ctx);
@@ -131,6 +144,11 @@ void codegenImpl(RooSimultaneous &arg, CodegenContext &ctx);
 void codegenImpl(RooStats::HistFactory::FlexibleInterpVar &arg, CodegenContext &ctx);
 void codegenImpl(RooUniform &arg, CodegenContext &ctx);
 void codegenImpl(RooWrapperPdf &arg, CodegenContext &ctx);
+
+std::string codegenLogImpl(RooAbsArg &arg, CodegenContext &ctx);
+std::string codegenLogImpl(RooFit::Detail::RooFixedProdPdf &arg, CodegenContext &ctx);
+std::string codegenLogImpl(RooFit::Detail::RooNormalizedPdf &arg, CodegenContext &ctx);
+std::string codegenLogImpl(RooGaussian &arg, CodegenContext &ctx);
 
 std::string codegenIntegralImpl(RooAbsReal &arg, int code, const char *rangeName, CodegenContext &ctx);
 std::string codegenIntegralImpl(RooBernstein &arg, int code, const char *rangeName, CodegenContext &ctx);

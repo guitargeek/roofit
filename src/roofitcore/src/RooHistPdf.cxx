@@ -471,6 +471,112 @@ bool RooHistPdf::forceAnalyticalInt(const RooAbsArg& dep) const
    return forceAnalyticalInt(_pdfObsList, dep);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/// Return the histogram bin boundaries mapped to the coordinates of the plot
+/// observable `obs`. This handles the case where the p.d.f. observable is a
+/// transformation of the plot observable (for example a shift like
+/// `x_shifted = x - shift`), so that the returned boundaries are the positions
+/// of the histogram bin edges as they appear when the p.d.f. is plotted as a
+/// function of `obs`.
+///
+/// Returns an empty vector if no corresponding histogram observable can be
+/// located, or if a non-invertible transformation is detected.
+
+std::vector<double> RooHistPdf::histogramBoundariesInPlotObs(RooDataHist const &dataHist, RooArgSet const &pdfObsList,
+                                                             RooArgSet const &histObsList, RooAbsRealLValue &obs,
+                                                             double xlo, double xhi)
+{
+   std::vector<double> result;
+
+   // The histogram observable for `obs` belongs to the p.d.f. observable with
+   // the same name, or else to the first one that is a function of `obs`.
+   RooAbsArg *histObs = nullptr;
+   RooAbsArg *pdfObs = nullptr;
+   bool useTransform = false;
+   for (unsigned int i = 0; i < pdfObsList.size(); ++i) {
+      if (std::string(obs.GetName()) == pdfObsList[i]->GetName()) {
+         histObs = histObsList[i];
+         break;
+      }
+   }
+   if (!histObs) {
+      for (unsigned int i = 0; i < pdfObsList.size(); ++i) {
+         auto *po = dynamic_cast<RooAbsReal *>(pdfObsList[i]);
+         if (po && po->dependsOn(obs)) {
+            histObs = histObsList[i];
+            pdfObs = pdfObsList[i];
+            useTransform = true;
+            break;
+         }
+      }
+   }
+   if (!histObs) {
+      return result;
+   }
+
+   auto *lval = dynamic_cast<RooAbsLValue *>(dataHist.get()->find(histObs->GetName()));
+   if (!lval) {
+      return result;
+   }
+
+   const RooAbsBinning *binning = lval->getBinningPtr(nullptr);
+   const int nBoundaries = binning->numBoundaries();
+   const double *rawBoundaries = binning->array();
+
+   if (!useTransform) {
+      result.assign(rawBoundaries, rawBoundaries + nBoundaries);
+      return result;
+   }
+
+   // Invert `pdfObs = T(obs)` with a linear approximation of `T` on the plot
+   // range, which is exact for linear transformations. Inverting with the
+   // setVal() of an l-value like RooLinearVar would throw for boundaries that
+   // map outside the range of `obs`.
+   auto *pdfObsReal = static_cast<RooAbsReal *>(pdfObs);
+   const double probeLo = std::max(xlo, obs.getMin());
+   const double probeHi = std::min(xhi, obs.getMax());
+   if (probeHi > probeLo) {
+      // Restore `obs` with assign(), because setVal() throws if an outer
+      // integral has set it outside of its default range.
+      RooArgSet obsLeaves;
+      obs.leafNodeServerList(&obsLeaves);
+      RooArgSet obsSaved;
+      obsLeaves.snapshot(obsSaved, false);
+      auto evalAt = [&](double val) {
+         obs.setVal(val);
+         return pdfObsReal->getVal();
+      };
+      const double probeMid = 0.5 * (probeLo + probeHi);
+      const double plo = evalAt(probeLo);
+      const double phi = evalAt(probeHi);
+      const double pmid = evalAt(probeMid);
+      obsLeaves.assign(obsSaved);
+      const double slope = (phi - plo) / (probeHi - probeLo);
+
+      // The midpoint reveals non-linear transformations.
+      const double pmidLinear = plo + slope * (probeMid - probeLo);
+      const double scale = std::max(std::abs(plo), std::abs(phi));
+      if (std::abs(pmid - pmidLinear) > 1e-7 * (scale > 0.0 ? scale : 1.0)) {
+         oocoutW(nullptr, Plotting)
+            << "RooHistPdf::histogramBoundariesInPlotObs: the histogram observable '" << pdfObsReal->GetName()
+            << "' appears to be a non-linear transformation of the plot observable '" << obs.GetName()
+            << "'. The bin boundaries used for plotting and integration are approximated assuming a linear "
+               "relation and may be placed incorrectly."
+            << std::endl;
+      }
+
+      if (slope != 0.0) {
+         result.reserve(nBoundaries);
+         for (int i = 0; i < nBoundaries; ++i) {
+            result.push_back(probeLo + (rawBoundaries[i] - plo) / slope);
+         }
+      }
+   }
+
+   // The transformation may reverse the order (negative slope).
+   std::sort(result.begin(), result.end());
+   return result;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Return sampling hint for making curves of (projections) of this function
@@ -496,40 +602,19 @@ std::list<double>* RooHistPdf::plotSamplingHint(RooDataHist const& dataHist,
     return nullptr;
   }
 
-  // Check that observable is in dataset, if not no hint is generated
-  RooAbsArg* dhObs = nullptr;
-  for (unsigned int i=0; i < pdfObsList.size(); ++i) {
-    RooAbsArg* histObs = histObsList[i];
-    RooAbsArg* pdfObs = pdfObsList[i];
-    if (std::string(obs.GetName())==pdfObs->GetName()) {
-      dhObs = dataHist.get()->find(histObs->GetName()) ;
-      break;
-    }
+  const std::vector<double> boundaries = histogramBoundariesInPlotObs(dataHist, pdfObsList, histObsList, obs, xlo, xhi);
+  if (boundaries.empty()) {
+     return nullptr;
   }
-
-  if (!dhObs) {
-    return nullptr;
-  }
-  RooAbsLValue* lval = dynamic_cast<RooAbsLValue*>(dhObs) ;
-  if (!lval) {
-    return nullptr;
-  }
-
-  // Retrieve position of all bin boundaries
-
-  const RooAbsBinning* binning = lval->getBinningPtr(nullptr);
-  std::span<const double> boundaries{binning->array(), static_cast<std::size_t>(binning->numBoundaries())};
 
   // Use the helper function from RooCurve to make sure to get sampling hints
   // that work with the RooFitPlotting.
   return RooCurve::plotSamplingHintForBinBoundaries(boundaries, xlo, xhi);
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////
-/// Return sampling hint for making curves of (projections) of this function
-/// as the recursive division strategy of RooCurve cannot deal efficiently
-/// with the vertical lines that occur in a non-interpolated histogram
+/// Return the histogram bin boundaries in the plot-observable coordinate,
+/// used for example by the RooBinIntegrator and the binned likelihood.
 
 std::list<double>* RooHistPdf::binBoundaries(RooAbsRealLValue& obs, double xlo, double xhi) const
 {
@@ -538,27 +623,20 @@ std::list<double>* RooHistPdf::binBoundaries(RooAbsRealLValue& obs, double xlo, 
     return nullptr;
   }
 
-  // Check that observable is in dataset, if not no hint is generated
-  RooAbsLValue* lvarg = dynamic_cast<RooAbsLValue*>(_dataHist->get()->find(obs.GetName())) ;
-  if (!lvarg) {
-    return nullptr ;
+  const std::vector<double> boundaries =
+     histogramBoundariesInPlotObs(*_dataHist, _pdfObsList, _histObsList, obs, xlo, xhi);
+  if (boundaries.empty()) {
+     return nullptr;
   }
 
-  // Retrieve position of all bin boundaries
-  const RooAbsBinning* binning = lvarg->getBinningPtr(nullptr);
-  double* boundaries = binning->array() ;
-
-  auto hint = new std::list<double> ;
-
-  // Construct array with pairs of points positioned epsilon to the left and
-  // right of the bin boundaries
-  for (Int_t i=0 ; i<binning->numBoundaries() ; i++) {
-    if (boundaries[i]>=xlo && boundaries[i]<=xhi) {
-      hint->push_back(boundaries[i]) ;
-    }
+  auto hint = new std::list<double>;
+  for (double b : boundaries) {
+     if (b >= xlo && b <= xhi) {
+        hint->push_back(b);
+     }
   }
 
-  return hint ;
+  return hint;
 }
 
 

@@ -73,6 +73,20 @@ namespace RooFit::Experimental {
 
 namespace {
 
+/// Code for the sum of the logarithms of the given servers of `in`. Each term
+/// is added in a separate statement, because the compiler and Clad recurse for
+/// every operator of an expression, which overflows the stack for sums with
+/// several thousand terms.
+std::string sumOfLogs(RooAbsArg const &in, RooAbsCollection const &args, CodegenContext &ctx)
+{
+   const std::string sum = ctx.getTmpVarName();
+   ctx.addToCodeBody(&in, "double " + sum + " = 0.0;\n");
+   for (RooAbsArg *arg : args) {
+      ctx.addToCodeBody(&in, sum + " += " + ctx.getLogResult(*arg) + ";\n");
+   }
+   return sum;
+}
+
 // Return a stringy-field version of the value, formatted to maximum precision.
 std::string doubleToString(double val)
 {
@@ -111,10 +125,25 @@ void rooHistTranslateImpl(RooAbsArg const &arg, CodegenContext &ctx, int intOrde
    ctx.addResult(&arg, "(" + weightArr + ")[" + offset + "]");
 }
 
-std::string realSumPdfTranslateImpl(CodegenContext &ctx, RooAbsArg const &arg, RooArgList const &funcList,
-                                    RooArgList const &coefList, bool normalize)
+std::string
+realSumPdfTranslateImpl(CodegenContext &ctx, RooArgList const &funcList, RooArgList const &coefList, bool normalize)
 {
    bool noLastCoeff = funcList.size() != coefList.size();
+
+   // Decide the scope from the inputs rather than from the RooRealSumPdf
+   // itself: this function is also used for the integral of the sum, whose
+   // inputs are the integrals of the components. Those usually don't depend
+   // on the data even though the sum does, and then the code must not end up
+   // inside the event loop, because the integral is also the expected number
+   // of events that the extended likelihood uses after the loop.
+   bool scopeIndependent = true;
+   for (RooAbsArg const *func : funcList) {
+      scopeIndependent = scopeIndependent && ctx.isScopeIndependent(func);
+   }
+   for (RooAbsArg const *coef : coefList) {
+      scopeIndependent = scopeIndependent && ctx.isScopeIndependent(coef);
+   }
+   auto addCode = [&](std::string const &code) { ctx.addToCodeBody(code, scopeIndependent); };
 
    std::string const &funcName = ctx.buildArg(funcList);
    std::string const &coeffName = ctx.buildArg(coefList);
@@ -122,7 +151,7 @@ std::string realSumPdfTranslateImpl(CodegenContext &ctx, RooAbsArg const &arg, R
 
    std::string sum = ctx.getTmpVarName();
    std::string coeffSum = ctx.getTmpVarName();
-   ctx.addToCodeBody(&arg, "double " + sum + " = 0;\ndouble " + coeffSum + "= 0;\n");
+   addCode("double " + sum + " = 0;\ndouble " + coeffSum + "= 0;\n");
 
    std::string iterator = "i_" + ctx.getTmpVarName();
    std::string subscriptExpr = "[" + iterator + "]";
@@ -137,7 +166,7 @@ std::string realSumPdfTranslateImpl(CodegenContext &ctx, RooAbsArg const &arg, R
    } else if (normalize) {
       code += sum + " /= " + coeffSum + ";\n";
    }
-   ctx.addToCodeBody(&arg, code);
+   addCode(code);
 
    return sum;
 }
@@ -191,6 +220,7 @@ void codegenImpl(PiecewiseInterpolation &arg, CodegenContext &ctx)
    std::vector<double> valsNominal;
    std::vector<double> valsLow;
    std::vector<double> valsHigh;
+   valsNominal.reserve(nBins);
    for (int i = 0; i < nBins; ++i) {
       valsNominal.push_back(nomHist.weight(i));
    }
@@ -249,7 +279,7 @@ void codegenImpl(RooAbsArg &arg, CodegenContext &ctx)
 
 void codegenImpl(RooAddPdf &arg, CodegenContext &ctx)
 {
-   ctx.addResult(&arg, realSumPdfTranslateImpl(ctx, arg, arg.pdfList(), arg.coefList(), true));
+   ctx.addResult(&arg, realSumPdfTranslateImpl(ctx, arg.pdfList(), arg.coefList(), true));
 }
 
 void codegenImpl(RooMultiVarGaussian &arg, CodegenContext &ctx)
@@ -304,14 +334,6 @@ void codegenImpl(RooSimultaneous &arg, CodegenContext &ctx)
    // component selected by the current category state, like for RooMultiPdf.
    // With an observable index category, the likelihood is decomposed into
    // per-channel terms and the RooSimultaneous itself is never translated.
-   if (arg.canBeExtended()) {
-      std::stringstream errorMsg;
-      errorMsg << "RooSimultaneous \"" << arg.GetName()
-               << "\" with extendable components and a non-observable index category can't be translated, because the "
-                  "scalar evaluation applies a relative yield weight that code generation does not implement yet.";
-      oocoutE(&arg, Minimization) << errorMsg.str() << std::endl;
-      throw std::runtime_error(errorMsg.str());
-   }
    if (!arg.indexCat().isFundamental()) {
       std::stringstream errorMsg;
       errorMsg << "RooSimultaneous \"" << arg.GetName()
@@ -420,7 +442,7 @@ void codegenImpl(RooConstVar &arg, CodegenContext &ctx)
 
 void codegenImpl(RooConstraintSum &arg, CodegenContext &ctx)
 {
-   ctx.addResult(&arg, ctx.buildCall(mathFunc("constraintSum"), arg.list(), arg.list().size()));
+   ctx.addResult(&arg, "-" + sumOfLogs(arg, arg.list(), ctx));
 }
 
 // Generate RooFit codegen wrappers for RooFunctorBinding and similar objects,
@@ -444,10 +466,11 @@ void functorCodegenImpl(RooArg_t &arg, RooArgList const &variables, CodegenConte
    std::string nStr = std::to_string(std::size(variables));
 
    std::string type;
-   if constexpr (std::is_same_v<RooArg_t, RooFunctor1DBinding> || std::is_same_v<RooArg_t, RooFunctor1DPdfBinding>)
+   if constexpr (std::is_same_v<RooArg_t, RooFunctor1DBinding> || std::is_same_v<RooArg_t, RooFunctor1DPdfBinding>) {
       type = "::ROOT::Math::IGradientFunctionOneDim";
-   else
+   } else {
       type = "::ROOT::Math::IGradientFunctionMultiDim";
+   }
 
    std::string funcAddrCasted = "reinterpret_cast<" + type + " const *>(" + funcAddrStr + ")";
 
@@ -597,7 +620,7 @@ void codegenImpl(RooLandau &arg, CodegenContext &ctx)
 
 void codegenImpl(RooLognormal &arg, CodegenContext &ctx)
 {
-   std::string funcName = arg.useStandardParametrization() ? "logNormalEvaluateStandard" : "logNormal";
+   std::string funcName = arg.useStandardParametrization() ? "logNormalStandard" : "logNormal";
    ctx.addResult(&arg, ctx.buildCall(mathFunc(funcName), arg.getX(), arg.getShapeK(), arg.getMedian()));
 }
 
@@ -690,7 +713,10 @@ void codegenImpl(RooFit::Detail::RooNLLVarNew &arg, CodegenContext &ctx)
    // brackets of the loop is written at the end of the scopes lifetime.
    {
       auto scope = ctx.beginLoop(&arg);
-      std::string term = ctx.buildCall(mathFunc("nll"), arg.func(), arg.weightVar(), arg.binnedL(), 0);
+      // The unbinned likelihood takes the logarithm of the pdf directly, so
+      // that e.g. products of many factors don't underflow.
+      std::string term = arg.binnedL() ? ctx.buildCall(mathFunc("nll"), arg.func(), arg.weightVar(), 0)
+                                       : "-(" + ctx.getResult(arg.weightVar()) + ") * " + ctx.getLogResult(arg.func());
       ctx.addToCodeBody(&arg, resName + " += " + term + ";");
    }
    if (arg.expectedEvents()) {
@@ -705,6 +731,37 @@ void codegenImpl(RooFit::Detail::RooNormalizedPdf &arg, CodegenContext &ctx)
    ctx.addResult(&arg, ctx.getResult(arg.pdf()) + "/" + ctx.getResult(arg.normIntegral()));
 }
 
+std::string codegenLogImpl(RooAbsArg &arg, CodegenContext &ctx)
+{
+   return "std::log(" + ctx.getResult(arg) + ")";
+}
+
+std::string codegenLogImpl(RooFit::Detail::RooFixedProdPdf &arg, CodegenContext &ctx)
+{
+   if (arg.isRearranged()) {
+      return codegenLogImpl(static_cast<RooAbsArg &>(arg), ctx);
+   }
+   return sumOfLogs(arg, *arg.partList(), ctx);
+}
+
+std::string codegenLogImpl(RooFit::Detail::RooNormalizedPdf &arg, CodegenContext &ctx)
+{
+   return ctx.getLogResult(arg.pdf()) + " - " + ctx.getLogResult(arg.normIntegral());
+}
+
+std::string codegenLogImpl(RooGaussian &arg, CodegenContext &ctx)
+{
+   return ctx.buildCall(mathFunc("logGaussian"), arg.getX(), arg.getMean(), arg.getSigma());
+}
+
+// Support for the deprecated RooParamHistFunc, to be removed in ROOT 6.46
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 void codegenImpl(RooParamHistFunc &arg, CodegenContext &ctx)
 {
    std::string const &idx = arg.dataHist().calculateTreeIndexForCodeSquash(ctx, arg.xList());
@@ -720,6 +777,11 @@ void codegenImpl(RooParamHistFunc &arg, CodegenContext &ctx)
    }
    ctx.addResult(&arg, result.str());
 }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
 
 void codegenImpl(RooPoisson &arg, CodegenContext &ctx)
 {
@@ -847,12 +909,12 @@ void codegenImpl(RooRealIntegral &arg, CodegenContext &ctx)
 
 void codegenImpl(RooRealSumFunc &arg, CodegenContext &ctx)
 {
-   ctx.addResult(&arg, realSumPdfTranslateImpl(ctx, arg, arg.funcList(), arg.coefList(), false));
+   ctx.addResult(&arg, realSumPdfTranslateImpl(ctx, arg.funcList(), arg.coefList(), false));
 }
 
 void codegenImpl(RooRealSumPdf &arg, CodegenContext &ctx)
 {
-   ctx.addResult(&arg, realSumPdfTranslateImpl(ctx, arg, arg.funcList(), arg.coefList(), false));
+   ctx.addResult(&arg, realSumPdfTranslateImpl(ctx, arg.funcList(), arg.coefList(), false));
 }
 
 void codegenImpl(RooRealVar &arg, CodegenContext &ctx)
@@ -1119,7 +1181,7 @@ std::string codegenIntegralImpl(RooPolynomial &arg, int, const char *rangeName, 
 std::string codegenIntegralImpl(RooRealSumPdf &arg, int code, const char *rangeName, CodegenContext &ctx)
 {
    // Re-use translate, since integration is linear.
-   return realSumPdfTranslateImpl(ctx, arg, arg.funcIntListFromCache(code, rangeName), arg.coefList(), false);
+   return realSumPdfTranslateImpl(ctx, arg.funcIntListFromCache(code, rangeName), arg.coefList(), false);
 }
 
 std::string codegenIntegralImpl(RooUniform &arg, int code, const char *rangeName, CodegenContext &)

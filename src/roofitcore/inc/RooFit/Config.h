@@ -17,7 +17,17 @@
 // memory safe.
 // #define ROOFIT_MEMORY_SAFE_INTERFACES
 
+#include <ROOT/RConfig.hxx>
+
 #include <memory>
+
+// RooFit in ROOT master uses R__DEPRECATED(6, 46, ...), but in this standalone
+// build, RConfig.hxx comes from the RooFit-less ROOT installation, which might
+// predate the corresponding helper macro. Define it like ROOT does for the
+// versions before 6.46.
+#ifndef _R__DEPRECATED_646
+#define _R__DEPRECATED_646(REASON) _R__DEPRECATED_LATER(REASON)
+#endif
 
 namespace RooFit {
 

@@ -51,6 +51,8 @@ public:
 
    std::unique_ptr<ChangeOperModeRAII> setOperModes(RooAbsArg::OperMode opMode);
 
+   void unregisterNode(RooAbsArg const &arg);
+
 private:
    void processVariable(NodeInfo &nodeInfo);
    void processCategory(NodeInfo &nodeInfo);
@@ -61,6 +63,7 @@ private:
    void computeCPUNode(const RooAbsArg *node, NodeInfo &info);
    void setOperMode(RooAbsArg *arg, RooAbsArg::OperMode opMode);
    void syncDataTokens();
+   void setupLogEvaluation();
    void updateOutputSizes();
 
    std::unique_ptr<RooBatchCompute::AbsBufferManager> _bufferManager;

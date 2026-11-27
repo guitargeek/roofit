@@ -487,8 +487,6 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
 
     // now make function that linearly interpolates expectation between variations
     // get low/high variations to interpolate between
-    std::vector<double> low;
-    std::vector<double> high;
     RooArgSet lowSet;
     RooArgSet highSet;
     for(unsigned int j=0; j<histoSysList.size(); ++j){
@@ -615,8 +613,9 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
          const double tauVal = 1./(relerr*relerr);
          const double sqtau = 1./relerr;
          RooRealVar &beta = emplace<RooRealVar>(proto, "beta_" + strname, 1., 0., 10.);
-         // the global observable (y_s)
-         RooRealVar &yvar = emplace<RooRealVar>(proto, "nom_" + std::string{beta.GetName()}, tauVal, 0., 10.);
+         // the global observable (y_s), in a finite range for toys that covers tau * beta
+         RooRealVar &yvar = emplace<RooRealVar>(proto, "nom_" + std::string{beta.GetName()}, tauVal, 0.,
+                                                std::max(1., tauVal) * beta.getMax());
          // the rate of the gamma distribution (theta)
          RooRealVar &theta = emplace<RooRealVar>(proto, "theta_" + strname, 1./tauVal);
          // find alpha as function of beta
@@ -879,12 +878,8 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     std::vector<std::vector<RooAbsArg*>> allSampleHistFuncs;
     std::vector<RooProduct*> sampleScaleFactors;
 
-    std::vector<std::pair<string, string>> statNamePairs;
     std::vector<std::pair<const TH1 *, std::unique_ptr<TH1>>> statHistPairs; // <nominal, error>
     const std::string statFuncName = "mc_stat_" + channel_name;
-
-    string prefix;
-    string range;
 
     /////////////////////////////
     // shared parameters

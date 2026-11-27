@@ -9,6 +9,23 @@
 # @author Carsten Burgard, CERN
 ############################################################################
 
+# The RooFit-independent part is compiled as a separate object library, so we
+# don't accidentally include RooFit again without getting compiler errors.
+add_library(hs3cpp OBJECT
+  src/HS3Document.cxx
+  src/HS3Parser.cxx
+  src/HS3Upgrade.cxx
+  src/HS3Validate.cxx
+  src/HS3Variates.cxx
+  src/HS3Writer.cxx
+  src/JSONInterface.cxx
+)
+set_target_properties(hs3cpp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(hs3cpp PRIVATE nlohmann_json::nlohmann_json)
+# In the ROOT build, the public headers are found in the include directory of
+# the build tree.
+target_include_directories(hs3cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+
 add_library(RooFitHS3 SHARED)
 
 set(ROOFITHS3_HEADERS
@@ -21,8 +38,6 @@ set(RELATIVE_INC_HEADERS ${ROOFITHS3_HEADERS})
 list(TRANSFORM RELATIVE_INC_HEADERS PREPEND inc/)
 
 set(sources_cxx
-    src/Domains.cxx
-    src/JSONInterface.cxx
     src/JSONIO.cxx
     src/RooJSONFactoryWSTool.cxx
     src/JSONFactories_RooFitCore.cxx
@@ -31,12 +46,9 @@ set(sources_cxx
 )
 
 target_sources(RooFitHS3 PRIVATE ${RELATIVE_INC_HEADERS} ${sources_cxx})
+target_sources(RooFitHS3 PRIVATE $<TARGET_OBJECTS:hs3cpp>)
 
 target_include_directories(RooFitHS3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
-
-target_link_libraries(RooFitHS3 PRIVATE
-    nlohmann_json::nlohmann_json
-)
 
 # These are the DEPENDENCIES in the ROOT build, which are linked publicly there.
 # They have to be public here too, otherwise the include directories and link
@@ -60,21 +72,21 @@ install(TARGETS RooFitHS3
 )
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/inc/" DESTINATION "include")
 
-if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
-  target_sources(
-      RooFitHS3
-      PRIVATE
-      FILE_SET private_header_files
-      TYPE HEADERS
-      BASE_DIRS inc/ src/
-      FILES
-          ${RELATIVE_INC_HEADERS}
-          # LinkDef.h # seemingly not being used by ROOT_STANDARD_LIBRARY_PACKAGE call
-          src/Domains.h
-          src/JSONIOUtils.h
-          src/static_execute.h
-  )
-endif()
+target_sources(
+    RooFitHS3
+    PRIVATE
+    FILE_SET private_header_files
+    TYPE HEADERS
+    BASE_DIRS inc/ src/
+    FILES
+        ${RELATIVE_INC_HEADERS}
+        # LinkDef.h # seemingly not being used by ROOT_STANDARD_LIBRARY_PACKAGE call
+        src/HS3Builder.h
+        src/HS3Document.h
+        src/HS3Schema.h
+        src/JSONIOUtils.h
+        src/JSONReadRecorder.h
+)
 
 if(testing)
   add_subdirectory(test)

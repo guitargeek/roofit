@@ -35,6 +35,7 @@ set(ROOFIT_HEADERS
     RooDecay.h
     RooDstD0BG.h
     RooExponential.h
+    RooFit/Detail/CFunctionBinding.h
     RooFunctor1DBinding.h
     RooFunctorBinding.h
     RooGExpModel.h
@@ -186,19 +187,17 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   target_compile_options(RooFit PUBLIC -fno-math-errno)
 endif()
 
-if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
-  target_sources(
-      RooFit
-      PRIVATE
-      FILE_SET private_header_files
-      TYPE HEADERS
-      BASE_DIRS inc/ src/
-      FILES
-          ${RELATIVE_INC_HEADERS}
-          inc/LinkDef1.h
-          src/RooFit/Detail/Algorithms.h
-  )
-endif()
+target_sources(
+    RooFit
+    PRIVATE
+    FILE_SET private_header_files
+    TYPE HEADERS
+    BASE_DIRS inc/ src/
+    FILES
+        ${RELATIVE_INC_HEADERS}
+        inc/LinkDef1.h
+        src/RooFit/Detail/Algorithms.h
+)
 
 if(testing)
   add_subdirectory(test)

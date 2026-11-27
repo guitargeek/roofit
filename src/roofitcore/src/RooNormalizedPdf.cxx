@@ -30,19 +30,21 @@ void RooNormalizedPdf::doEval(RooFit::EvalContext &ctx) const
 {
    auto nums = ctx.at(_pdf);
    auto integralSpan = ctx.at(_normIntegral);
-
-   // We use the extraArgs as output parameter to count evaluation errors.
-   _evalErrorCounts = {};
-
    auto config = ctx.config(this);
-   RooBatchCompute::compute(config, RooBatchCompute::NormalizedPdf, ctx.output(), {nums, integralSpan},
-                            _evalErrorCounts);
+
+   // The first three extra args are output parameters to count evaluation
+   // errors. The last one tells the LogNormalizedPdf computer whether the pdf
+   // values are logarithms already.
+   _extraArgs = {0., 0., 0., static_cast<double>(ctx.outputsLogarithm(&*_pdf))};
+   const auto computer =
+      ctx.outputsLogarithm(this) ? RooBatchCompute::LogNormalizedPdf : RooBatchCompute::NormalizedPdf;
+   RooBatchCompute::compute(config, computer, ctx.output(), {nums, integralSpan}, _extraArgs);
 
    if (config.useCuda()) {
       // In CUDA mode, the counters are read back from the GPU without
-      // synchronizing the stream: they only arrive in _evalErrorCounts with
-      // the synchronization at the end of the evaluation of the full
-      // computation graph, so the logging has to be deferred until then.
+      // synchronizing the stream: they only arrive in _extraArgs with the
+      // synchronization at the end of the evaluation of the full computation
+      // graph, so the logging has to be deferred until then.
       ctx.deferAction([this] { logEvalErrorCounts(); });
    } else {
       logEvalErrorCounts();
@@ -51,9 +53,9 @@ void RooNormalizedPdf::doEval(RooFit::EvalContext &ctx) const
 
 void RooNormalizedPdf::logEvalErrorCounts() const
 {
-   const std::size_t nEvalErrorsType0 = _evalErrorCounts[0];
-   const std::size_t nEvalErrorsType1 = _evalErrorCounts[1];
-   const std::size_t nEvalErrorsType2 = _evalErrorCounts[2];
+   const std::size_t nEvalErrorsType0 = _extraArgs[0];
+   const std::size_t nEvalErrorsType1 = _extraArgs[1];
+   const std::size_t nEvalErrorsType2 = _extraArgs[2];
 
    for (std::size_t i = 0; i < nEvalErrorsType0; ++i) {
       logEvalError("p.d.f normalization integral is zero or negative");

@@ -3,13 +3,19 @@
 // Authors: Jonas Rembser, CERN 2026
 
 #include <RooBatchCompute.h>
+#include <RooNaNPacker.h>
 
 #include <ROOT/TestSupport.hxx>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <random>
+#include <sstream>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -149,5 +155,162 @@ TEST_F(RooBatchComputeMT, ReduceNLL)
    for (int nThreads : {1, 4}) {
       auto out = run(nThreads);
       EXPECT_EQ(out.nNonPositiveValues, 2u) << "with " << nThreads << " threads";
+   }
+}
+
+/// Reducing the logarithms of the probabilities gives the same result and the
+/// same evaluation error counters as reducing the probabilities.
+TEST_F(RooBatchComputeMT, ReduceNLLFromLogarithms)
+{
+   std::vector<double> probas = makeRandomVector(nEvents, 0.01, 1., 105);
+   std::vector<double> weights = makeRandomVector(nEvents, 0.5, 2., 106);
+   auto logOf = [](std::vector<double> const &values) {
+      std::vector<double> out(values.size());
+      std::transform(values.begin(), values.end(), out.begin(), [](double x) { return std::log(x); });
+      return out;
+   };
+
+   for (int nThreads : {1, 4}) {
+      auto ref = RooBatchCompute::reduceNLL(makeConfig(nThreads), probas, weights, {});
+      auto out = RooBatchCompute::reduceNLL(makeConfig(nThreads), logOf(probas), weights, {}, true);
+      EXPECT_NEAR(out.nllSum, ref.nllSum, 1e-12 * std::abs(ref.nllSum)) << "with " << nThreads << " threads";
+   }
+
+   probas[123] = 0.0;
+   probas[181818] = std::numeric_limits<double>::quiet_NaN();
+   for (int nThreads : {1, 4}) {
+      auto out = RooBatchCompute::reduceNLL(makeConfig(nThreads), logOf(probas), weights, {}, true);
+      EXPECT_EQ(out.nNonPositiveValues, 1u) << "with " << nThreads << " threads";
+      EXPECT_EQ(out.nNaNValues, 1u) << "with " << nThreads << " threads";
+   }
+}
+
+/// The LogProdPdf computer sums the factors given as logarithms and
+/// multiplies the others, without underflow for many small factors.
+TEST_F(RooBatchComputeMT, ComputeLogProdPdf)
+{
+   constexpr std::size_t n = 1000;
+   constexpr std::size_t nLogFactors = 200;
+   constexpr std::size_t nFactors = 400;
+
+   std::vector<std::vector<double>> factors;
+   std::vector<double> ref(n, 0.0);
+   for (std::size_t k = 0; k < nFactors; ++k) {
+      factors.push_back(makeRandomVector(n, 1e-3, 1e-2, 200 + k));
+      for (std::size_t i = 0; i < n; ++i) {
+         ref[i] += std::log(factors[k][i]);
+         if (k < nLogFactors) {
+            factors[k][i] = std::log(factors[k][i]);
+         }
+      }
+   }
+   // A zero and a negative factor.
+   factors[nLogFactors][0] = 0.0;
+   factors[nLogFactors][1] = -0.5;
+
+   std::vector<std::span<const double>> vars(factors.begin(), factors.end());
+   std::vector<double> output(n);
+   std::array<double, 1> extraArgs{static_cast<double>(nLogFactors)};
+   RooBatchCompute::compute(makeConfig(1), RooBatchCompute::LogProdPdf, output, vars, extraArgs);
+
+   EXPECT_EQ(output[0], -std::numeric_limits<double>::infinity());
+   EXPECT_TRUE(std::isnan(output[1]));
+   for (std::size_t i = 2; i < n; ++i) {
+      EXPECT_NEAR(output[i], ref[i], 1e-12 * std::abs(ref[i])) << "for event " << i;
+   }
+}
+
+/// The logarithm of a product stays exact if a single factor is tiny, or if
+/// the first factors multiply to a subnormal number or overflow and later
+/// factors bring the product back into range. A NaN factor keeps its payload.
+TEST_F(RooBatchComputeMT, ComputeLogProdPdfExtremeFactors)
+{
+   constexpr std::size_t nFactors = 207;
+   std::vector<std::vector<double>> factors(nFactors, std::vector<double>(4, 1.0));
+   for (std::size_t k = 0; k < 50; ++k) {
+      factors[k][0] = 0x1p-5;
+   }
+   factors[50][0] = 1e-247;
+   for (std::size_t k = 0; k < nFactors; ++k) {
+      factors[k][1] = k < 107 ? 1e-3 : 1e3;
+      factors[k][2] = k < 107 ? 1e3 : 1e-3;
+   }
+   factors[50][3] = RooNaNPacker::packFloatIntoNaN(3.f);
+   const std::array<double, 3> ref{50 * std::log(0x1p-5) + std::log(1e-247), 107 * std::log(1e-3) + 100 * std::log(1e3),
+                                   107 * std::log(1e3) + 100 * std::log(1e-3)};
+
+   std::vector<std::span<const double>> vars(factors.begin(), factors.end());
+   std::vector<double> output(4);
+   std::array<double, 1> extraArgs{0.0};
+   RooBatchCompute::compute(makeConfig(1), RooBatchCompute::LogProdPdf, output, vars, extraArgs);
+
+   for (std::size_t i = 0; i < ref.size(); ++i) {
+      EXPECT_NEAR(output[i], ref[i], 1e-12 * std::abs(ref[i])) << "for event " << i;
+   }
+   EXPECT_TRUE(std::isnan(output[3]));
+// Like in testNaNPacker, payloads don't survive arithmetic in this configuration.
+#if !defined(_MSC_VER) || defined(_WIN64) || defined(NDEBUG) || defined(R__ENABLE_BROKEN_WIN_TESTS)
+   EXPECT_EQ(RooNaNPacker::unpackNaN(output[3]), 3.f);
+#endif
+}
+
+/// The LogNormalizedPdf computer outputs the logarithm of the NormalizedPdf
+/// output, with the same NaN payloads and evaluation error counts, for pdf
+/// values given linearly or as logarithms, and for scalar integrals.
+TEST_F(RooBatchComputeMT, ComputeLogNormalizedPdf)
+{
+   std::vector<double> nums = makeRandomVector(nEvents, 0., 10., 107);
+   std::vector<double> dens = makeRandomVector(nEvents, 0.5, 2., 108);
+   // Scalar inputs are broadcast to bufferSize-wide arrays.
+   std::vector<double> scalarDens(RooBatchCompute::bufferSize, 1.5);
+   // All types of evaluation errors, and zero pdf values.
+   dens[10] = -1.0;
+   dens[11] = 0.0;
+   nums[12] = std::numeric_limits<double>::quiet_NaN();
+   nums[13] = 0.0;
+   nums[14] = 0.0;
+   dens[14] = 0.0;
+   std::vector<double> logNums(nEvents);
+   std::transform(nums.begin(), nums.end(), logNums.begin(), [](double x) { return std::log(x); });
+   // Negative pdf values can only be given linearly.
+   std::vector<double> numsWithNegative = nums;
+   numsWithNegative[15] = -0.5;
+
+   auto run = [](RooBatchCompute::Computer computer, std::vector<double> const &x, std::vector<double> const &den,
+                 bool numIsLog, int nThreads) {
+      std::vector<double> output(nEvents);
+      std::vector<double> extraArgs{0.0, 0.0, 0.0, static_cast<double>(numIsLog)};
+      RooBatchCompute::compute(makeConfig(nThreads), computer, output, {x, den}, extraArgs);
+      return std::make_pair(output, extraArgs);
+   };
+
+   for (bool numIsLog : {false, true}) {
+      std::vector<double> const &linearNums = numIsLog ? nums : numsWithNegative;
+      std::vector<double> const &input = numIsLog ? logNums : numsWithNegative;
+      for (std::vector<double> const *den : {&dens, &scalarDens}) {
+         auto [ref, refCounts] = run(RooBatchCompute::NormalizedPdf, linearNums, *den, false, 1);
+         EXPECT_GT(refCounts[0] + refCounts[1] + refCounts[2], 0.0); // the test must produce errors
+         for (int nThreads : {1, 4}) {
+            auto [out, counts] = run(RooBatchCompute::LogNormalizedPdf, input, *den, numIsLog, nThreads);
+            std::stringstream ctx;
+            ctx << "with numIsLog = " << numIsLog << ", scalar integral = " << (den == &scalarDens) << ", " << nThreads
+                << " threads";
+            for (std::size_t k = 0; k < 3; ++k) {
+               EXPECT_EQ(counts[k], refCounts[k]) << "evaluation errors of type " << k << " " << ctx.str();
+            }
+            EXPECT_EQ(counts[3], static_cast<double>(numIsLog)) << ctx.str();
+            for (std::size_t i = 0; i < nEvents; ++i) {
+               if (std::isnan(ref[i])) {
+                  ASSERT_TRUE(std::isnan(out[i])) << "for event " << i << " " << ctx.str();
+                  ASSERT_EQ(RooNaNPacker::unpackNaN(out[i]), RooNaNPacker::unpackNaN(ref[i]))
+                     << "for event " << i << " " << ctx.str();
+               } else if (ref[i] == 0.0) {
+                  ASSERT_EQ(out[i], -std::numeric_limits<double>::infinity()) << "for event " << i << " " << ctx.str();
+               } else {
+                  ASSERT_NEAR(out[i], std::log(ref[i]), 1e-14) << "for event " << i << " " << ctx.str();
+               }
+            }
+         }
+      }
    }
 }

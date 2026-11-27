@@ -135,19 +135,17 @@ if(NOT MSVC)
                         WORLD_EXECUTE WORLD_READ)
 endif()
 
-if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
-  target_sources(
-      HistFactory
-      PRIVATE
-      FILE_SET private_header_files
-      TYPE HEADERS
-      BASE_DIRS inc/
-      FILES
-          ${RELATIVE_INC_HEADERS}
-          inc/LinkDef.h # seemingly not being used by ROOT_STANDARD_LIBRARY_PACKAGE call
-          inc/HFMsgService.h # not part of list above
-  )
-endif()
+target_sources(
+    HistFactory
+    PRIVATE
+    FILE_SET private_header_files
+    TYPE HEADERS
+    BASE_DIRS inc/
+    FILES
+        ${RELATIVE_INC_HEADERS}
+        inc/LinkDef.h # seemingly not being used by ROOT_STANDARD_LIBRARY_PACKAGE call
+        inc/HFMsgService.h # not part of list above
+)
 
 if(testing)
   add_subdirectory(test)

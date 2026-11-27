@@ -62,6 +62,7 @@ public:
    void doEval(RooFit::EvalContext &) const override;
    bool canComputeBatchWithCuda() const override { return _statistic == Statistic::NLL && !_binnedL; }
    bool isReducerNode() const override { return true; }
+   bool canUseLogarithmOf(RooAbsArg const &server, bool outputsLogarithm) const override;
 
    void setPrefix(std::string const &prefix);
 
@@ -71,7 +72,11 @@ public:
 
    void enableBinOffsetting(bool on = true) { _doBinOffset = on; }
 
-   void setSimCount(int simCount) { _simCount = simCount; }
+   void setSimCount(int simCount)
+   {
+      _simCount = simCount;
+      _logSimCount = std::log(static_cast<double>(simCount));
+   }
 
    enum class FuncMode {
       Pdf,
@@ -118,6 +123,7 @@ private:
    FuncMode _funcMode = FuncMode::Pdf;
    RooDataHist::ErrorType _chi2ErrorType = RooDataHist::Expected;
    int _simCount = 1;
+   double _logSimCount = 0.;
    std::string _prefix;
    std::vector<double> _binw;
    mutable ROOT::Math::KahanSum<double> _offset{0.}; ///<! Offset as KahanSum to avoid loss of precision

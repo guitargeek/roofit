@@ -12,10 +12,17 @@
 
 #include <RooFit/Detail/JSONInterface.h>
 
+#include "JSONReadRecorder.h"
+
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cstdlib>
+#include <deque>
+#include <iomanip>
 #include <istream>
-#include <list>
+#include <iterator>
+#include <limits>
 #include <memory>
 #include <sstream>
 
@@ -23,544 +30,401 @@
 // Hence, the JSON engine backing the RooFit::Detail::JSONTree could in
 // principle be swapped out by changing only this file.
 
-namespace {
-
-class TJSONTree : public RooFit::Detail::JSONTree {
-public:
-   class Node : public RooFit::Detail::JSONNode {
-   protected:
-      TJSONTree *tree;
-      class Impl;
-      template <class Nd, class NdType, class json_it>
-      class ChildItImpl;
-      friend TJSONTree;
-      std::unique_ptr<Impl> node;
-
-      const TJSONTree *get_tree() const { return tree; }
-      TJSONTree *get_tree() { return tree; }
-      const Impl &get_node() const;
-      Impl &get_node();
-
-   public:
-      void writeJSON(std::ostream &os) const override;
-
-      Node(TJSONTree *t, std::istream &is);
-      Node(TJSONTree *t, Impl &other);
-      Node(TJSONTree *t);
-      Node(const Node &other);
-      virtual ~Node();
-      Node &operator<<(std::string const &s) override;
-      Node &operator<<(int i) override;
-      Node &operator<<(double d) override;
-      Node &operator<<(bool b) override;
-      const Node &operator>>(std::string &v) const override;
-      Node &operator[](std::string const &k) override;
-      const Node &operator[](std::string const &k) const override;
-      bool is_container() const override;
-      bool is_map() const override;
-      bool is_seq() const override;
-      bool is_null() const override;
-      bool is_number() const override;
-      Node &set_map() override;
-      Node &set_seq() override;
-      Node &set_null() override;
-      void clear() override;
-      std::string key() const override;
-      std::string val() const override;
-      int val_int() const override;
-      double val_double() const override;
-      bool val_bool() const override;
-      bool has_key() const override;
-      bool has_val() const override;
-      bool has_child(std::string const &) const override;
-      Node &append_child() override;
-      size_t num_children() const override;
-      Node &child(size_t pos) override;
-      const Node &child(size_t pos) const override;
-
-      children_view children() override;
-      const_children_view children() const override;
-   };
-
-protected:
-   Node root;
-   std::list<Node> _nodecache;
-
-public:
-   TJSONTree();
-   ~TJSONTree() override;
-   TJSONTree(std::istream &is);
-   TJSONTree::Node &incache(const TJSONTree::Node &n);
-
-   Node &rootnode() override { return root; }
-};
-
-inline nlohmann::json parseWrapper(std::istream &is)
-{
-   try {
-      return nlohmann::json::parse(is);
-   } catch (const nlohmann::json::exception &ex) {
-      throw std::runtime_error(ex.what());
-   }
-}
-
-// TJSONTree methods
-
-TJSONTree::TJSONTree() : root(this) {};
-
-TJSONTree::TJSONTree(std::istream &is) : root(this, is) {};
-
-TJSONTree::~TJSONTree()
-{
-   TJSONTree::_nodecache.clear();
-};
-
-TJSONTree::Node &TJSONTree::incache(const TJSONTree::Node &n)
-{
-   _nodecache.push_back(n);
-   return _nodecache.back();
-}
-
-const TJSONTree::Node::Impl &TJSONTree::Node::get_node() const
-{
-   return *node;
-}
-
-TJSONTree::Node::Impl &TJSONTree::Node::get_node()
-{
-   return *node;
-}
-
-// TJSONTree::Node implementation
-
-class TJSONTree::Node::Impl {
-public:
-   std::string _key;
-   std::string const &key() const { return _key; }
-   virtual nlohmann::json &get() = 0;
-   virtual const nlohmann::json &get() const = 0;
-   class BaseNode;
-   class NodeRef;
-   Impl(const std::string &k) : _key(k) {}
-   virtual ~Impl() = default;
-   static TJSONTree::Node &mkNode(TJSONTree *t, const std::string &k, nlohmann::json &n);
-   static const TJSONTree::Node &mkNode(const TJSONTree *t, const std::string &k, const nlohmann::json &n);
-};
-
-class TJSONTree::Node::Impl::BaseNode : public TJSONTree::Node::Impl {
-   nlohmann::json node;
-
-public:
-   nlohmann::json &get() override { return node; }
-   const nlohmann::json &get() const override { return node; }
-   BaseNode(std::istream &is) : Impl(""), node(parseWrapper(is)) {}
-   BaseNode() : Impl("") {}
-};
-
-class TJSONTree::Node::Impl::NodeRef : public TJSONTree::Node::Impl {
-   nlohmann::json &node;
-
-public:
-   nlohmann::json &get() override { return node; }
-   const nlohmann::json &get() const override { return node; }
-   NodeRef(const std::string &k, nlohmann::json &n) : Impl(k), node(n) {}
-   NodeRef(const NodeRef &other) : Impl(other.key()), node(other.node) {}
-};
-
-TJSONTree::Node &TJSONTree::Node::Impl::mkNode(TJSONTree *t, const std::string &k, nlohmann::json &n)
-{
-   Node::Impl::NodeRef ref(k, n);
-   return t->incache(Node(t, ref));
-}
-
-const TJSONTree::Node &TJSONTree::Node::Impl::mkNode(const TJSONTree *t, const std::string &k, const nlohmann::json &n)
-{
-   // not so nice to use const_cast here, but the non-const version will only live in the cache
-   Node::Impl::NodeRef ref(k, const_cast<nlohmann::json &>(n));
-   return const_cast<TJSONTree *>(t)->incache(Node(const_cast<TJSONTree *>(t), ref));
-}
-
-TJSONTree::Node::Node(TJSONTree *t, std::istream &is) : tree(t), node(std::make_unique<Impl::BaseNode>(is)) {}
-
-TJSONTree::Node::Node(TJSONTree *t) : tree(t), node(std::make_unique<Impl::BaseNode>()) {}
-
-TJSONTree::Node::Node(TJSONTree *t, Impl &other)
-   : tree(t), node(std::make_unique<Impl::NodeRef>(other.key(), other.get()))
-{
-}
-
-TJSONTree::Node::Node(const Node &other) : Node(other.tree, *other.node) {}
-
-TJSONTree::Node::~Node() = default;
-
-// TJSONNode interface
-
-void TJSONTree::Node::writeJSON(std::ostream &os) const
-{
-   os << node->get();
-}
-
-TJSONTree::Node &TJSONTree::Node::operator<<(std::string const &s)
-{
-   node->get() = s;
-   return *this;
-}
-
-TJSONTree::Node &TJSONTree::Node::operator<<(int i)
-{
-   node->get() = i;
-   return *this;
-}
-
-TJSONTree::Node &TJSONTree::Node::operator<<(double d)
-{
-   node->get() = d;
-   return *this;
-}
-
-TJSONTree::Node &TJSONTree::Node::operator<<(bool b)
-{
-   node->get() = b;
-   return *this;
-}
-
-const TJSONTree::Node &TJSONTree::Node::operator>>(std::string &v) const
-{
-   v = node->get().get<std::string>();
-   return *this;
-}
-
-TJSONTree::Node &TJSONTree::Node::operator[](std::string const &k)
-{
-   return Impl::mkNode(tree, k, node->get()[k]);
-}
-
-const TJSONTree::Node &TJSONTree::Node::operator[](std::string const &k) const
-{
-   return Impl::mkNode(tree, k, node->get()[k]);
-}
-
-bool TJSONTree::Node::is_container() const
-{
-   return node->get().is_array() || node->get().is_object();
-}
-
-bool TJSONTree::Node::is_map() const
-{
-   return node->get().is_object();
-}
-
-bool TJSONTree::Node::is_seq() const
-{
-   return node->get().is_array();
-}
-
-bool TJSONTree::Node::is_null() const
-{
-   return node->get().is_null();
-}
-
-bool TJSONTree::Node::is_number() const
-{
-   return node->get().is_number();
-}
-
-// To check whether it's allowed to reset the type of an object. We allow
-// this for nodes that have no type yet, or nodes with an empty string.
-bool isResettingPossible(nlohmann::json const &node)
-{
-
-   if (node.type() == nlohmann::json::value_t::null) {
-      return true;
-   }
-
-   if (node.type() == nlohmann::json::value_t::string) {
-      if (node.get<std::string>().empty()) {
-         return true;
-      }
-   }
-   return false;
-}
-
-TJSONTree::Node &TJSONTree::Node::set_map()
-{
-   if (node->get().type() == nlohmann::json::value_t::object)
-      return *this;
-
-   if (isResettingPossible(node->get())) {
-      node->get() = nlohmann::json::object();
-   } else {
-      throw std::runtime_error("cannot declare \"" + this->key() + "\" to be of map - type, already of type " +
-                               node->get().type_name());
-   }
-   return *this;
-}
-
-TJSONTree::Node &TJSONTree::Node::set_seq()
-{
-   if (node->get().type() == nlohmann::json::value_t::array)
-      return *this;
-
-   if (isResettingPossible(node->get())) {
-      node->get() = nlohmann::json::array();
-   } else {
-      throw std::runtime_error("cannot declare \"" + this->key() + "\" to be of seq - type, already of type " +
-                               node->get().type_name());
-   }
-   return *this;
-}
-
-TJSONTree::Node &TJSONTree::Node::set_null()
-{
-   node->get() = nullptr;
-   return *this;
-}
-
-void TJSONTree::Node::clear()
-{
-   node->get().clear();
-}
-
-std::string TJSONTree::Node::key() const
-{
-   return node->key();
-}
-
-std::string TJSONTree::Node::val() const
-{
-   switch (node->get().type()) {
-   case nlohmann::json::value_t::string: return node->get().get<std::string>();
-   case nlohmann::json::value_t::boolean: return node->get().get<bool>() ? "true" : "false";
-   case nlohmann::json::value_t::number_integer: return std::to_string(node->get().get<int>());
-   case nlohmann::json::value_t::number_unsigned: return std::to_string(node->get().get<unsigned int>());
-   case nlohmann::json::value_t::number_float: {
-      std::stringstream ss;
-      ss << node->get().get<double>();
-      return ss.str();
-   }
-   default:
-      throw std::runtime_error("node \"" + node->key() + "\": implicit string conversion for type " +
-                               node->get().type_name() + " not supported!");
-   }
-}
-
-int TJSONTree::Node::val_int() const
-{
-   return node->get().get<int>();
-}
-double TJSONTree::Node::val_double() const
-{
-   return node->get().get<double>();
-}
-bool TJSONTree::Node::val_bool() const
-{
-   auto const &nd = node->get();
-
-   // Attempting to convert zeroes and ones to bools.
-   if (nd.type() == nlohmann::json::value_t::number_unsigned) {
-      auto val = nd.get<unsigned int>();
-      if (val == 0)
-         return false;
-      if (val == 1)
-         return true;
-   }
-
-   return nd.get<bool>();
-}
-
-bool TJSONTree::Node::has_key() const
-{
-   return !node->key().empty();
-}
-
-bool TJSONTree::Node::has_val() const
-{
-   return node->get().is_primitive();
-}
-
-bool TJSONTree::Node::has_child(std::string const &c) const
-{
-   return node->get().find(c) != node->get().end();
-}
-
-TJSONTree::Node &TJSONTree::Node::append_child()
-{
-   node->get().push_back("");
-   return Impl::mkNode(tree, "", node->get().back());
-}
-
-size_t TJSONTree::Node::num_children() const
-{
-   return node->get().size();
-}
-
-TJSONTree::Node &TJSONTree::Node::child(size_t pos)
-{
-   return Impl::mkNode(tree, "", node->get().at(pos));
-}
-
-const TJSONTree::Node &TJSONTree::Node::child(size_t pos) const
-{
-   return Impl::mkNode(tree, "", node->get().at(pos));
-}
-
-using json_iterator = nlohmann::basic_json<>::iterator;
-using const_json_iterator = nlohmann::basic_json<>::const_iterator;
-
-template <class Nd, class NdType, class json_it>
-class TJSONTree::Node::ChildItImpl final : public RooFit::Detail::JSONNode::child_iterator_t<Nd>::Impl {
-public:
-   enum class POS {
-      BEGIN,
-      END
-   };
-   ChildItImpl(NdType &n, POS p)
-      : node(n), iter(p == POS::BEGIN ? n.get_node().get().begin() : n.get_node().get().end()) {};
-   ChildItImpl(NdType &n, json_it it) : node(n), iter(it) {}
-   ChildItImpl(const ChildItImpl &other) : node(other.node), iter(other.iter) {}
-   using child_iterator = RooFit::Detail::JSONNode::child_iterator_t<Nd>;
-   std::unique_ptr<typename child_iterator::Impl> clone() const override
-   {
-      return std::make_unique<ChildItImpl>(node, iter);
-   }
-   void forward() override { ++iter; }
-   void backward() override { --iter; }
-   Nd &current() override
-   {
-      if (node.is_seq()) {
-         return TJSONTree::Node::Impl::mkNode(node.get_tree(), "", iter.value());
-      } else {
-         return TJSONTree::Node::Impl::mkNode(node.get_tree(), iter.key(), iter.value());
-      }
-   }
-   bool equal(const typename child_iterator::Impl &other) const override
-   {
-      // We can use static_cast here because we never compare Iterators for
-      // different JSON node types.
-      auto it = static_cast<const ChildItImpl<Nd, NdType, json_it> *>(&other);
-      return it && it->iter == this->iter;
-   }
-
-private:
-   NdType &node;
-   json_it iter;
-};
-
-RooFit::Detail::JSONNode::children_view TJSONTree::Node::children()
-{
-   using childIt = TJSONTree::Node::ChildItImpl<RooFit::Detail::JSONNode, TJSONTree::Node, json_iterator>;
-   return {child_iterator(std::make_unique<childIt>(*this, childIt::POS::BEGIN)),
-           child_iterator(std::make_unique<childIt>(*this, childIt::POS::END))};
-}
-RooFit::Detail::JSONNode::const_children_view TJSONTree::Node::children() const
-{
-   using childConstIt =
-      TJSONTree::Node::ChildItImpl<const RooFit::Detail::JSONNode, const TJSONTree::Node, const_json_iterator>;
-   return {const_child_iterator(std::make_unique<childConstIt>(*this, childConstIt::POS::BEGIN)),
-           const_child_iterator(std::make_unique<childConstIt>(*this, childConstIt::POS::END))};
-}
-
-// Iterator implementation that is agnostic of the JSON parsing backend, used
-// for the default implementation of JSONNode::children().
-template <class Node_t>
-class ChildItImpl final : public RooFit::Detail::JSONNode::child_iterator_t<Node_t>::Impl {
-public:
-   using child_iterator = RooFit::Detail::JSONNode::child_iterator_t<Node_t>;
-   ChildItImpl(Node_t &n, size_t p) : node(n), pos(p) {}
-   ChildItImpl(const ChildItImpl &other) : node(other.node), pos(other.pos) {}
-   std::unique_ptr<typename child_iterator::Impl> clone() const override
-   {
-      return std::make_unique<ChildItImpl>(node, pos);
-   }
-   void forward() override { ++pos; }
-   void backward() override { --pos; }
-   Node_t &current() override { return node.child(pos); }
-   bool equal(const typename child_iterator::Impl &other) const override
-   {
-      auto it = dynamic_cast<const ChildItImpl<Node_t> *>(&other);
-      return it && &(it->node) == &(this->node) && (it->pos) == this->pos;
-   }
-
-private:
-   Node_t &node;
-   size_t pos;
-};
-
-} // namespace
-
 namespace RooFit {
 namespace Detail {
 
-template class JSONNode::child_iterator_t<JSONNode>;
-template class JSONNode::child_iterator_t<const JSONNode>;
+namespace {
 
-double JSONNode::val_double() const
+nlohmann::json &json(void *value)
 {
-   double out;
-   std::stringstream ss{val()};
-   ss >> out;
+   return *static_cast<nlohmann::json *>(value);
+}
+
+// Receives the events of a parse that only looks for the syntax error, see parse().
+class SyntaxErrorRecorder : public nlohmann::json_sax<nlohmann::json> {
+public:
+   bool null() override { return true; }
+   bool boolean(bool) override { return true; }
+   bool number_integer(number_integer_t) override { return true; }
+   bool number_unsigned(number_unsigned_t) override { return true; }
+   bool number_float(number_float_t, const string_t &) override { return true; }
+   bool string(string_t &) override { return true; }
+   bool binary(binary_t &) override { return true; }
+   bool start_object(std::size_t) override { return true; }
+   bool key(string_t &) override { return true; }
+   bool end_object() override { return true; }
+   bool start_array(std::size_t) override { return true; }
+   bool end_array() override { return true; }
+   bool parse_error(std::size_t, const std::string &, const nlohmann::json::exception &ex) override
+   {
+      message = ex.what();
+      return false;
+   }
+
+   std::string message;
+};
+
+// Parse without exceptions of the JSON library. For invalid input, the input is parsed again to get the message.
+nlohmann::json parse(std::string const &input)
+{
+   nlohmann::json out = nlohmann::json::parse(input, nullptr, /*allow_exceptions=*/false);
+   if (out.is_discarded()) {
+      SyntaxErrorRecorder recorder;
+      nlohmann::json::sax_parse(input, &recorder);
+      throw std::runtime_error(recorder.message);
+   }
    return out;
 }
 
-// Default fallback for backends that don't provide native type introspection:
-// a node is considered numeric if its textual value parses completely as a
-// floating-point number. Containers, null and non-numeric scalars (strings,
-// booleans) are rejected.
+// Reading a value with the wrong type throws an std::runtime_error, not an exception of the JSON library.
+[[noreturn]] void throwTypeError(std::string const &key, const char *expected, nlohmann::json const &value)
+{
+   throw std::runtime_error("node \"" + key + "\": expected " + expected + ", but the value is of type " +
+                            value.type_name());
+}
+
+// Makes a value a map or an array. Only a value that has no type yet or is an empty string, which is what
+// append_child() creates, can change its type.
+void setContainerType(nlohmann::json &value, nlohmann::json::value_t type, std::string const &key)
+{
+   if (value.type() == type) {
+      return;
+   }
+   if (!value.is_null() && !(value.is_string() && value.get_ref<std::string const &>().empty())) {
+      throw std::runtime_error("cannot declare \"" + key + "\" to be of " +
+                               (type == nlohmann::json::value_t::object ? "map" : "seq") + " - type, already of type " +
+                               value.type_name());
+   }
+   // Not with braces, which would create an array with one element.
+   value = nlohmann::json(type);
+}
+
+} // namespace
+
+// The nodes live as long as the tree, because the interface hands out references to them.
+class JSONNode::Storage {
+public:
+   // Not root{value}, which would be an array that contains the value.
+   explicit Storage(nlohmann::json value) : root(std::move(value)), rootNode{*this, &root, ""} {}
+
+   JSONNode &makeNode(nlohmann::json &value, std::string key)
+   {
+      nodes.push_back(std::unique_ptr<JSONNode>{new JSONNode{*this, &value, std::move(key)}});
+      return *nodes.back();
+   }
+
+   // The children are created up front, such that the iterators can be pointers into this list.
+   std::vector<JSONNode *> const &makeChildren(nlohmann::json &value)
+   {
+      childLists.emplace_back();
+      std::vector<JSONNode *> &list = childLists.back();
+      if (!value.is_structured()) {
+         return list;
+      }
+      list.reserve(value.size());
+      for (auto it = value.begin(); it != value.end(); ++it) {
+         list.push_back(&makeNode(it.value(), value.is_array() ? "" : it.key()));
+      }
+      return list;
+   }
+
+   // Tells the recorders that the component `key` of `value` is read, where nullptr means all components.
+   void recordRead(void const *value, std::string const *key)
+   {
+      for (JSONReadRecorder *recorder : recorders) {
+         recorder->record(value, key);
+      }
+   }
+
+   nlohmann::json root;
+   JSONNode rootNode;
+   std::vector<std::unique_ptr<JSONNode>> nodes;
+   std::deque<std::vector<JSONNode *>> childLists;
+   std::vector<JSONReadRecorder *> recorders;
+};
+
+// JSONNode
+
+JSONNode::JSONNode(Storage &storage, void *value, std::string key)
+   : _storage{&storage}, _value{value}, _key{std::move(key)}
+{
+}
+
+void JSONNode::writeJSON(std::ostream &os) const
+{
+   _storage->recordRead(_value, nullptr);
+   os << json(_value);
+}
+
+JSONNode &JSONNode::operator<<(std::string const &s)
+{
+   json(_value) = s;
+   return *this;
+}
+
+JSONNode &JSONNode::operator<<(int i)
+{
+   json(_value) = i;
+   return *this;
+}
+
+JSONNode &JSONNode::operator<<(double d)
+{
+   json(_value) = d;
+   return *this;
+}
+
+JSONNode &JSONNode::operator<<(bool b)
+{
+   json(_value) = b;
+   return *this;
+}
+
+JSONNode &JSONNode::operator[](std::string const &k)
+{
+   return _storage->makeNode(json(_value)[k], k);
+}
+
+const JSONNode &JSONNode::operator[](std::string const &k) const
+{
+   _storage->recordRead(_value, &k);
+   return _storage->makeNode(json(_value)[k], k);
+}
+
+bool JSONNode::is_container() const
+{
+   return json(_value).is_array() || json(_value).is_object();
+}
+
+bool JSONNode::is_map() const
+{
+   return json(_value).is_object();
+}
+
+bool JSONNode::is_seq() const
+{
+   return json(_value).is_array();
+}
+
+bool JSONNode::is_null() const
+{
+   return json(_value).is_null();
+}
+
 bool JSONNode::is_number() const
 {
-   if (is_container() || is_null()) {
-      return false;
+   return json(_value).is_number();
+}
+
+JSONNode &JSONNode::set_map()
+{
+   setContainerType(json(_value), nlohmann::json::value_t::object, _key);
+   return *this;
+}
+
+JSONNode &JSONNode::set_seq()
+{
+   setContainerType(json(_value), nlohmann::json::value_t::array, _key);
+   return *this;
+}
+
+JSONNode &JSONNode::set_null()
+{
+   json(_value) = nullptr;
+   return *this;
+}
+
+void JSONNode::clear()
+{
+   json(_value).clear();
+}
+
+void JSONNode::erase(std::string const &key)
+{
+   json(_value).erase(key);
+}
+
+std::string JSONNode::key() const
+{
+   return _key;
+}
+
+std::string JSONNode::val() const
+{
+   nlohmann::json const &value = json(_value);
+   switch (value.type()) {
+   case nlohmann::json::value_t::string: return value.get<std::string>();
+   case nlohmann::json::value_t::boolean: return value.get<bool>() ? "true" : "false";
+   case nlohmann::json::value_t::number_integer: return std::to_string(value.get<nlohmann::json::number_integer_t>());
+   case nlohmann::json::value_t::number_unsigned: return std::to_string(value.get<nlohmann::json::number_unsigned_t>());
+   case nlohmann::json::value_t::number_float: {
+      // The string has to read back as the same number. Start with the default precision of the streams, so that the
+      // numbers that six digits spell exactly keep their short spelling, and add digits as long as it takes.
+      const double number = value.get<double>();
+      std::stringstream ss;
+      for (int precision = 6; precision <= std::numeric_limits<double>::max_digits10; ++precision) {
+         ss.str("");
+         ss << std::setprecision(precision) << number;
+         if (std::strtod(ss.str().c_str(), nullptr) == number) {
+            break;
+         }
+      }
+      return ss.str();
    }
-   const std::string text = val();
-   if (text.empty()) {
-      return false;
+   default:
+      throw std::runtime_error("node \"" + _key + "\": implicit string conversion for type " + value.type_name() +
+                               " not supported!");
    }
-   try {
-      std::size_t consumed = 0;
-      std::stod(text, &consumed);
-      return consumed == text.size();
-   } catch (...) {
-      return false;
+}
+
+int JSONNode::val_int() const
+{
+   auto const &nd = json(_value);
+   if (!nd.is_number() && !nd.is_boolean()) {
+      throwTypeError(_key, "a number", nd);
    }
+   return nd.get<int>();
+}
+double JSONNode::val_double() const
+{
+   auto const &nd = json(_value);
+   if (!nd.is_number() && !nd.is_boolean()) {
+      throwTypeError(_key, "a number", nd);
+   }
+   return nd.get<double>();
+}
+bool JSONNode::val_bool() const
+{
+   std::optional<bool> out = try_val_bool();
+   if (!out) {
+      throwTypeError(_key, "a boolean", json(_value));
+   }
+   return *out;
+}
+
+std::optional<bool> JSONNode::try_val_bool() const
+{
+   auto const &nd = json(_value);
+   if (nd.is_boolean()) {
+      return nd.get<bool>();
+   }
+   // Attempting to convert zeroes and ones to bools.
+   if (nd.is_number_unsigned() && nd.get<nlohmann::json::number_unsigned_t>() <= 1) {
+      return nd.get<nlohmann::json::number_unsigned_t>() == 1;
+   }
+   return std::nullopt;
+}
+
+bool JSONNode::has_val() const
+{
+   return json(_value).is_primitive();
+}
+
+bool JSONNode::has_child(std::string const &c) const
+{
+   _storage->recordRead(_value, &c);
+   return json(_value).find(c) != json(_value).end();
+}
+
+JSONNode &JSONNode::append_child()
+{
+   json(_value).push_back("");
+   return _storage->makeNode(json(_value).back(), "");
+}
+
+size_t JSONNode::num_children() const
+{
+   return json(_value).size();
+}
+
+JSONNode &JSONNode::child(size_t pos)
+{
+   return _storage->makeNode(json(_value).at(pos), "");
+}
+
+const JSONNode &JSONNode::child(size_t pos) const
+{
+   _storage->recordRead(_value, nullptr);
+   return _storage->makeNode(json(_value).at(pos), "");
 }
 
 JSONNode::children_view JSONNode::children()
 {
-   return {child_iterator(std::make_unique<::ChildItImpl<JSONNode>>(*this, 0)),
-           child_iterator(std::make_unique<::ChildItImpl<JSONNode>>(*this, this->num_children()))};
+   std::vector<JSONNode *> const &list = _storage->makeChildren(json(_value));
+   return {child_iterator{list.data()}, child_iterator{list.data() + list.size()}};
 }
+
 JSONNode::const_children_view JSONNode::children() const
 {
-   return {const_child_iterator(std::make_unique<::ChildItImpl<const JSONNode>>(*this, 0)),
-           const_child_iterator(std::make_unique<::ChildItImpl<const JSONNode>>(*this, this->num_children()))};
+   _storage->recordRead(_value, nullptr);
+   std::vector<JSONNode *> const &list = _storage->makeChildren(json(_value));
+   return {const_child_iterator{list.data()}, const_child_iterator{list.data() + list.size()}};
 }
 
-std::ostream &operator<<(std::ostream &os, JSONNode const &s)
-{
-   s.writeJSON(os);
-   return os;
-}
+// JSONTree
 
-template <typename... Args>
-std::unique_ptr<JSONTree> JSONTree::createImpl(Args &&...args)
+JSONTree::JSONTree(std::unique_ptr<JSONNode::Storage> storage) : _storage{std::move(storage)} {}
+
+JSONTree::~JSONTree() = default;
+
+JSONNode &JSONTree::rootnode()
 {
-   return std::make_unique<TJSONTree>(std::forward<Args>(args)...);
+   return _storage->rootNode;
 }
 
 std::unique_ptr<JSONTree> JSONTree::create()
 {
-   return createImpl();
+   return std::unique_ptr<JSONTree>{new JSONTree{std::make_unique<JSONNode::Storage>(nlohmann::json{})}};
 }
 
 std::unique_ptr<JSONTree> JSONTree::create(std::istream &is)
 {
-   return createImpl(is);
+   return JSONTree::create(std::string{std::istreambuf_iterator<char>{is}, std::istreambuf_iterator<char>{}});
 }
 
 std::unique_ptr<JSONTree> JSONTree::create(std::string const &str)
 {
-   std::stringstream ss{str};
-   return JSONTree::create(ss);
+   return std::unique_ptr<JSONTree>{new JSONTree{std::make_unique<JSONNode::Storage>(parse(str))}};
+}
+
+// JSONReadRecorder
+
+JSONReadRecorder::JSONReadRecorder(JSONNode const &node) : _node{node}
+{
+   _node._storage->recorders.push_back(this);
+}
+
+JSONReadRecorder::~JSONReadRecorder()
+{
+   auto &recorders = _node._storage->recorders;
+   recorders.erase(std::find(recorders.begin(), recorders.end(), this));
+}
+
+void JSONReadRecorder::record(void const *value, std::string const *key)
+{
+   if (value != _node._value) {
+      return;
+   }
+   if (key) {
+      _read.insert(*key);
+   } else {
+      _readAll = true;
+   }
+}
+
+std::vector<std::string> JSONReadRecorder::unreadComponents() const
+{
+   std::vector<std::string> out;
+   nlohmann::json const &value = json(_node._value);
+   if (!value.is_object() || _readAll) {
+      return out;
+   }
+   for (auto const &item : value.items()) {
+      if (_read.count(item.key()) == 0) {
+         out.push_back(item.key());
+      }
+   }
+   return out;
 }
 
 } // namespace Detail

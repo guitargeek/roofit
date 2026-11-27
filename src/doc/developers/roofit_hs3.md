@@ -37,78 +37,7 @@ it was written in such a way as to allow users (that is, people like
 you) to easily add missing importers and exporters for existing
 `RooFit` classes as well as custom implementations you might be using.
 
-### Native and proxy-based importers and exporters
-
-`RooFitHS3` allows to different types of importers and exporters:
-*Native* implementations, and *proxy-based* ones.  If for a certain
-class several implementations are provided, the native
-implementation(s) take precedence.
-
-### Writing your own importers and exporters: Proxy-based
-
-Proxy-based implementations can be added very easily and without
-actually writing any `C++` code -- you only need to add a short item
-to a list in a `JSON` file, namely the
-[export keys](https://github.com/root-project/root/blob/master/etc/RooFitHS3_wsexportkeys.json)
-for an exporter, or the
-[factory expressions](https://github.com/root-project/root/blob/master/etc/RooFitHS3_wsfactoryexpressions.json)
-for an importer.
-
-This works in the following way: Every `RooFit` class performs
-dependency tracking via proxies, which have names. This can be
-exploited to perform the mapping of proxy names to `json` keys upon
-export. In the other direction, the `RooWorkspace` has a factory
-interface that allows to call any constructor via a string
-interface. Hence:
- - If a `RooFit` class has no other members aside from proxies, it can
-   be exported using a set of `export keys`.
- - If all relevant members to a `RooFit` class are passed as
-   constructor arguments, it can be imported using a `factory
-   expression`.
-
-For the importer, an entry in the
-[factory expressions](https://github.com/root-project/root/blob/master/etc/RooFitHS3_wsfactoryexpressions.json)
-needs to be added as follows:
-
-``` {.json}
-    "<json-key>": {
-        "class": "<C++ class name>",
-        "arguments": [
-            "<json-key of constructor argument #1>",
-            "<json-key of constructor argument #2>",
-             ...
-        ]
-    }
-```
-
-Similarly, for the exporter, an entry in the
-[export keys](https://github.com/root-project/root/blob/master/etc/RooFitHS3_wsexportkeys.json)
-needs to be added as follows:
-
-``` {.json}
-    "<C++ class name>": {
-        "type": "<json-key>",
-        "proxies": {
-            "<name of proxy>": "<json-key of this element>",
-            "<name of proxy>": "<json-key of this element>",
-            ...
-        }
-    }
-```
-
-
-If you don't want to edit the central `json` files containing the
-factory expressions or export keys, you can also put your custom
-export keys or factory expressions into a different json file and load
-that using `RooFit::JSONIO::loadExportKeys(const std::string
-&fname)` and `RooFit::JSONIO::loadFactoryExpressions(const
-std::string &fname)`.
-
-If either the importer or the exporter cannot be created with factory
-expressions and export keys, you can instead write a custom `C++`
-class to perform the import and export for you.
-
-### Writing your own importers and exporters: Custom `C++` code
+### Writing your own importers and exporters
 
 In order to implement your own importer or exporter, you can inherit
 from the corresponding base classes `RooFit::JSONIO::Importer`
@@ -121,9 +50,11 @@ in `ROOT`.
 Any importer should take the following form:
 
 ``` {.cpp}
+    using RooFit::Detail::JSONNode;
+
     class MyClassFactory : public RooFit::JSONIO::Importer {
     public:
-       bool importFunction(RooJSONFactoryWSTool *tool, const JSONNode &p) const override
+       bool importArg(RooJSONFactoryWSTool *tool, const JSONNode &p) const override
        {
           std::string name(RooJSONFactoryWSTool::name(p));
 
@@ -145,14 +76,24 @@ Any importer should take the following form:
     };
 ```
 
-If the class you are trying to import inherits from `RooAbsPdf` rather
-than from `RooAbsReal`, you should define `importPdf` instead of
-`importFunction`, with the same signature.
+The same `importArg` function is used for functions (inheriting from
+`RooAbsReal`) and pdfs (inheriting from `RooAbsPdf`). If the importer
+can't handle a given `JSON` node, it should return `false` so that the
+next importer is tried. The functions `importFunction` and `importPdf`
+of older `ROOT` versions are still called for backwards compatibility,
+so existing importers that override them keep working, but new code
+should override `importArg`.
 
 Once your importer implementation exists, you need to register it with the tool using a line like the following:
 
 ``` {.cpp}
-    RooFit::JSONIO::registerImporter("<json key>", new MyClassFactory(), true);
+    RooFit::JSONIO::registerImporter<MyClassFactory>("<json key>", true);
+```
+
+This is a shorthand for passing an instance owned by a `std::unique_ptr`:
+
+``` {.cpp}
+    RooFit::JSONIO::registerImporter("<json key>", std::make_unique<MyClassFactory>(), true);
 ```
 
 As there can be several importers for the same `json` key, the last
@@ -189,8 +130,19 @@ The implementation of an exporter works in a very similar fashion:
 Also this needs to be registered with the tool
 
 ``` {.cpp}
-    RooFit::JSONIO::registerExporter(MyClass::Class(), new MyClassStreamer(), true);
+    RooFit::JSONIO::registerExporter<MyClassStreamer>(MyClass::Class(), true);
 ```
+
+or equivalently
+
+``` {.cpp}
+    RooFit::JSONIO::registerExporter(MyClass::Class(), std::make_unique<MyClassStreamer>(), true);
+```
+
+If the `TClass` of your class is not available where you register the
+exporter, you can also pass the class name as a string instead of
+`MyClass::Class()`. If `exportObject` returns `false`, the next
+exporter is tried.
 
 For more complicated cases where members are lists of elements, the
 methods `is_seq()`, `set_seq()`, `is_map()`, `set_map()` and
@@ -205,8 +157,7 @@ filing a feature request via the
 If you don't want to wait for one of the dev's to pick up your request
 an process it, you can use the above instructions to write your own.
 If you wrote an importer or exporter for a `RooFit` class that is part
-of `ROOT`, either via `export keys` and `factory expressions`, or via
-native `C++` classes, please consider contributing your implementation
+of `ROOT`, please consider contributing your implementation
 to `ROOT` such that it can help other users also missing this importer
 or exporter. You can fork `ROOT`, commit your changes, and file a pull
 request to `ROOT` for your work to be included in the next release!

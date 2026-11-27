@@ -156,7 +156,6 @@
           ];
           # libraries you compile and link against
           buildInputs = with pkgs; [
-            fftw
             gsl
             gtest
             libxml2
@@ -168,9 +167,8 @@
             #
             #   mkdir build && cd build && cmake $CONFIGURE_ARGS
             #
-            # Add -Dfftw3=ON if you want the FFT-based RooFit classes (fftw is
-            # in this shell for that purpose), and -Dclad_tests=ON to also
-            # build and run the test suite of the builtin clad.
+            # Add -Dclad_tests=ON to also build and run the test suite of the
+            # builtin clad.
             export CONFIGURE_ARGS=" \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_INSTALL_PREFIX=../install \
@@ -182,13 +180,8 @@
                -DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit \
                .."
 
-            # The interpreter needs to find the headers of the externals that
-            # RooFit headers include. The paths to your local RooFit build are
-            # not set here: source setup.sh from the repository root for that.
-            export ROOT_INCLUDE_PATH="${
-              pkgs.lib.makeIncludePath [ pkgs.fftw ]
-            }''${ROOT_INCLUDE_PATH:+:$ROOT_INCLUDE_PATH}"
-
+            # The paths to your local RooFit build are not set here: source
+            # setup.sh from the repository root for that.
             export PROJECT_NAME=roofit
             echo "Entered the standalone RooFit dev shell (ROOT ${pkgs.root-no-roofit.version} without RooFit)."
           '';

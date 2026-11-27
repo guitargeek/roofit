@@ -55,12 +55,20 @@ public:
    Int_t getAnalyticalIntegralWN(RooArgSet &allVars, RooArgSet &analVars, const RooArgSet *normSet,
                                  const char *rangeName = nullptr) const override
    {
-      return _pdf->getAnalyticalIntegralWN(allVars, analVars, normSet ? normSet : &_normSet, rangeName);
+      return _pdf->getAnalyticalIntegralWN(allVars, analVars, hasNormSet(normSet) ? normSet : nullptr, rangeName);
    }
    /// Forward calculation of analytical integrals to input p.d.f
    double analyticalIntegralWN(Int_t code, const RooArgSet *normSet, const char *rangeName = nullptr) const override
    {
-      return _pdf->analyticalIntegralWN(code, normSet ? normSet : &_normSet, rangeName);
+      if (hasNormSet(normSet)) {
+         return _pdf->analyticalIntegralWN(code, normSet, rangeName);
+      }
+      // Without normalization set (e.g. in a RooGenProdProj), integrate the
+      // normalized value as it is. This assumes that the normalization integral
+      // doesn't depend on the integrated observables. It is taken from this
+      // wrapper and not from the input pdf, whose cached normalization integral
+      // goes stale in the RooFit::Evaluator.
+      return _pdf->analyticalIntegralWN(code, nullptr, rangeName) / _normIntegral;
    }
 
    ExtendMode extendMode() const override { return static_cast<RooAbsPdf &>(*_pdf).extendMode(); }
@@ -71,6 +79,12 @@ public:
       return _pdf->createExpectedEventsFunc(&_normSet);
    }
 
+   // Only worth it if the pdf can output its logarithm, avoiding exp() and log().
+   bool canOutputLogarithm() const override { return _pdf->canOutputLogarithm(); }
+   bool canUseLogarithmOf(RooAbsArg const &server, bool outputsLogarithm) const override
+   {
+      return outputsLogarithm && &server == &*_pdf;
+   }
    bool canComputeBatchWithCuda() const override { return true; }
 
    RooAbsPdf const &pdf() const { return *_pdf; }
@@ -87,17 +101,20 @@ protected:
    double getValV(const RooArgSet * normSet) const override;
 
 private:
+   static bool hasNormSet(const RooArgSet *normSet) { return normSet && !normSet->empty(); }
    void logEvalErrorCounts() const;
 
    RooTemplateProxy<RooAbsPdf> _pdf;
    RooRealProxy _normIntegral;
    RooArgSet _normSet;
 
-   /// Evaluation error counters, filled by the compute function. In CUDA
-   /// mode, they are read back from the GPU asynchronously and only arrive
-   /// after the evaluation of the computation graph, so they have to live in
-   /// a member and not on the stack of doEval(). Transient and not copied.
-   mutable std::array<double, 3> _evalErrorCounts{}; //<!
+   /// Extra args of the compute functions: three evaluation error counters,
+   /// filled by the compute function, and whether the pdf value is a
+   /// logarithm. In CUDA mode, the counters are read back from the GPU
+   /// asynchronously and only arrive after the evaluation of the computation
+   /// graph, so they have to live in a member and not on the stack of
+   /// doEval(). Transient and not copied.
+   mutable std::array<double, 4> _extraArgs{}; //<!
 
    ClassDefOverride(RooFit::Detail::RooNormalizedPdf, 0);
 };

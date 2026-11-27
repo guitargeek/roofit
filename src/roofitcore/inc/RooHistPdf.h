@@ -22,6 +22,7 @@
 #include "RooDataHist.h"
 
 #include <list>
+#include <vector>
 
 class RooRealVar;
 class RooAbsReal;
@@ -94,6 +95,8 @@ public:
 
   void doEval(RooFit::EvalContext &) const override;
 
+  RooArgSet const &getHistObsList() const { return _histObsList; }
+
   RooArgSet const &variables() const { return _pdfObsList; }
 
 protected:
@@ -142,6 +145,10 @@ private:
                                              RooAbsRealLValue& obs,
                                              double xlo,
                                              double xhi);
+
+  static std::vector<double> histogramBoundariesInPlotObs(RooDataHist const &dataHist, RooArgSet const &pdfObsList,
+                                                          RooArgSet const &histObsList, RooAbsRealLValue &obs,
+                                                          double xlo, double xhi);
 
   inline void initializeOwnedDataHist(std::unique_ptr<RooDataHist> &&dataHist)
   {

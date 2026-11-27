@@ -97,6 +97,7 @@ enum Computer {
    Gamma,
    GaussModelExpBasis,
    Gaussian,
+   LogGaussian,
    Identity,
    Johnson,
    Landau,
@@ -104,11 +105,13 @@ enum Computer {
    LognormalStandard,
    NegativeLogarithms,
    NormalizedPdf,
+   LogNormalizedPdf,
    Novosibirsk,
    Poisson,
    Polynomial,
    Power,
    ProdPdf,
+   LogProdPdf,
    Ratio,
    TruthModelExpBasis,
    TruthModelSinBasis,
@@ -180,18 +183,20 @@ public:
    /// Compute the values for a batch of events.
    ///
    /// The extra args (the last parameter) are read-only inputs for all
-   /// computers except `NormalizedPdf`, which uses them as output parameters
-   /// for its evaluation error counters. In the CUDA implementation, these
-   /// outputs are read back from the device *asynchronously*: they only
-   /// arrive in the caller's span with the next synchronizeCudaStream() call
-   /// on the stream of the passed config. The memory backing the extra args
-   /// of a `NormalizedPdf` call must therefore stay valid until that
-   /// synchronization, so it must not live on the caller's stack.
+   /// computers except `NormalizedPdf` and `LogNormalizedPdf`, which use the
+   /// first three as output parameters for their evaluation error counters.
+   /// In the CUDA implementation, these outputs are read back from the device
+   /// *asynchronously*: they only arrive in the caller's span with the next
+   /// synchronizeCudaStream() call on the stream of the passed config. The
+   /// memory backing the extra args of such a call must therefore stay valid
+   /// until that synchronization, so it must not live on the caller's stack.
    virtual void compute(Config const &cfg, Computer, std::span<double> output, VarSpan, ArgSpan) = 0;
 
    virtual double reduceSum(Config const &cfg, InputArr input, size_t n) = 0;
+   /// Reduce the probabilities to the negative log-likelihood. With
+   /// `logProbas`, the probabilities are given as logarithms.
    virtual ReduceNLLOutput reduceNLL(Config const &cfg, std::span<const double> probas, std::span<const double> weights,
-                                     std::span<const double> offsetProbas) = 0;
+                                     std::span<const double> offsetProbas, bool logProbas) = 0;
 
    virtual Architecture architecture() const = 0;
    virtual std::string architectureName() const = 0;
@@ -246,10 +251,10 @@ inline double reduceSum(Config cfg, InputArr input, size_t n)
 }
 
 inline ReduceNLLOutput reduceNLL(Config cfg, std::span<const double> probas, std::span<const double> weights,
-                                 std::span<const double> offsetProbas)
+                                 std::span<const double> offsetProbas, bool logProbas = false)
 {
    auto dispatch = cfg.useCuda() ? dispatchCUDA : dispatchCPU;
-   return dispatch->reduceNLL(cfg, probas, weights, offsetProbas);
+   return dispatch->reduceNLL(cfg, probas, weights, offsetProbas, logProbas);
 }
 
 std::string getBatchComputeChoice();

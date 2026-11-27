@@ -46,7 +46,7 @@ using PrioLowest = Prio<10>;
 /// @brief A class to maintain the context for squashing of RooFit models into code.
 class CodegenContext {
 public:
-   void addResult(RooAbsArg const *key, std::string const &value);
+   void addResult(RooAbsArg const *in, std::string const &value);
    void addResult(const char *key, std::string const &value);
 
    std::string const &getResult(RooAbsArg const &arg);
@@ -57,6 +57,11 @@ public:
       return getResult(key.arg());
    }
 
+   /// Like getResult(), but for the logarithm of the value. Classes can
+   /// implement codegenLogImpl() to compute it directly, e.g. to avoid that
+   /// products of many factors underflow.
+   std::string const &getLogResult(RooAbsArg const &arg);
+
    void addToGlobalScope(std::string const &str);
    void addVecObs(const char *key, int idx);
    int observableIndexOf(const RooAbsArg &arg) const;
@@ -64,6 +69,8 @@ public:
    void addToCodeBody(RooAbsArg const *klass, std::string const &in);
 
    void addToCodeBody(std::string const &in, bool isScopeIndep = false);
+
+   bool isScopeIndependent(RooAbsArg const *in) const;
 
    /// @brief Build the code to call the function with name `funcname`, passing some arguments.
    /// The arguments can either be doubles or some RooFit arguments whose
@@ -98,7 +105,7 @@ public:
 
    std::string getTmpVarName() const;
 
-   std::string buildArg(RooAbsCollection const &x, std::string const &arrayType = "double");
+   std::string buildArg(RooAbsCollection const &in, std::string const &arrayType = "double");
 
    std::string buildArg(std::span<const double> arr);
    std::string buildArg(std::span<const int> arr) { return buildArgSpanImpl(arr); }
@@ -116,28 +123,16 @@ public:
    std::string
    buildFunction(RooAbsArg const &arg, std::unordered_set<RooFit::Detail::DataKey> const &dependsOnData = {});
 
-   struct ScopeRAII {
-      std::string _fn;
-      CodegenContext &_ctx;
-      RooAbsArg const *_arg;
-
-   public:
-      ScopeRAII(RooAbsArg const *arg, CodegenContext &ctx);
-      ~ScopeRAII();
-   };
-   ScopeRAII OutputScopeRangeComment(RooAbsArg const *arg) { return {arg, *this}; }
-
 private:
    void pushScope();
    void popScope();
    template <class T>
    std::string buildArgSpanImpl(std::span<const T> arr);
 
-   bool isScopeIndependent(RooAbsArg const *in) const;
-
    void endLoop(LoopScope const &scope);
 
    void addResult(TNamed const *key, std::string const &value);
+   std::string saveResult(RooAbsArg const *in, std::string const &value);
 
    template <class T, typename std::enable_if<std::is_floating_point<T>{}, bool>::type = true>
    std::string buildArg(T x)
@@ -186,14 +181,13 @@ private:
 
    /// @brief Map of node names to their result strings.
    std::unordered_map<const TNamed *, std::string> _nodeNames;
+   std::unordered_map<const TNamed *, std::string> _logNodeNames;
    /// @brief A map to keep track of the observable indices if they are non scalar.
    std::unordered_map<const TNamed *, int> _vecObsIndices;
    /// @brief Indicate whether a node depends on the dataset.
    std::unordered_set<RooFit::Detail::DataKey> _dependsOnData;
    /// @brief The code layered by lexical scopes used as a stack.
    std::vector<std::string> _code;
-   /// @brief The indentation level for pretty-printing.
-   unsigned _indent = 0;
    /// @brief Index to get unique names for temporary variables.
    mutable int _tmpVarIdx = 0;
    /// @brief A map to keep track of list names as assigned by addResult.

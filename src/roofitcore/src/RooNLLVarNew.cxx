@@ -220,6 +220,7 @@ RooNLLVarNew::RooNLLVarNew(const RooNLLVarNew &other, const char *name)
      _funcMode{other._funcMode},
      _chi2ErrorType{other._chi2ErrorType},
      _simCount{other._simCount},
+     _logSimCount{other._logSimCount},
      _prefix{other._prefix},
      _binw{other._binw}
 {
@@ -248,7 +249,11 @@ void RooNLLVarNew::fillBinWidthsFromPdfBoundaries(RooAbsReal const &pdf, RooArgS
       throw std::runtime_error("BinnedPdf optimization only works with a 1D pdf.");
    } else {
       auto *var = static_cast<RooRealVar *>(observables.first());
-      std::list<double> *boundaries = pdf.binBoundaries(*var, var->getMin(), var->getMax());
+      std::unique_ptr<std::list<double>> boundaries{pdf.binBoundaries(*var, var->getMin(), var->getMax())};
+      if (!boundaries) {
+         throw std::runtime_error(std::string("BinnedPdf optimization requires the pdf \"") + pdf.GetName() +
+                                  "\" to provide bin boundaries for \"" + var->GetName() + "\".");
+      }
       std::list<double>::iterator biter = boundaries->begin();
       _binw.resize(boundaries->size() - 1);
       double lastBound = (*biter);
@@ -284,7 +289,7 @@ void RooNLLVarNew::doEvalBinnedL(RooFit::EvalContext &ctx, std::span<const doubl
          // Catch error condition: data present where zero events are predicted
          logEvalError(Form("Observed %f events in bin %lu with zero event yield", N, (unsigned long)i));
       } else {
-         result += RooFit::Detail::MathFuncs::nll(mu, N, true, _doBinOffset);
+         result += RooFit::Detail::MathFuncs::nll(mu, N, _doBinOffset);
          sumWeightKahanSum += N;
       }
    }
@@ -368,6 +373,12 @@ void RooNLLVarNew::doEvalChi2(RooFit::EvalContext &ctx, std::span<const double> 
    finalizeResult(ctx, result, sumWeightKahanSum.Sum());
 }
 
+/// The unbinned likelihood can directly take the logarithms of the pdf values.
+bool RooNLLVarNew::canUseLogarithmOf(RooAbsArg const &server, bool /*outputsLogarithm*/) const
+{
+   return _statistic == Statistic::NLL && !_binnedL && &server == &*_func;
+}
+
 void RooNLLVarNew::doEval(RooFit::EvalContext &ctx) const
 {
    std::span<const double> weights = ctx.at(_weightVar);
@@ -392,7 +403,8 @@ void RooNLLVarNew::doEval(RooFit::EvalContext &ctx) const
    }
 
    auto nllOut = RooBatchCompute::reduceNLL(config, probas, _weightSquared ? weightsSumW2 : weights,
-                                            _doBinOffset ? ctx.at(*_offsetPdf) : std::span<const double>{});
+                                            _doBinOffset ? ctx.at(*_offsetPdf) : std::span<const double>{},
+                                            ctx.outputsLogarithm(&*_func));
 
    if (nllOut.nInfiniteValues > 0) {
       oocoutW(&*_func, Eval) << "RooAbsPdf::getLogVal(" << _func->GetName()
@@ -471,7 +483,7 @@ void RooNLLVarNew::finalizeResult(RooFit::EvalContext &ctx, ROOT::Math::KahanSum
    // If we do bin-by bin offsetting, we don't do this because it cancels out.
    // The correction is specific to NLL; it has no meaning for chi2.
    if (_statistic == Statistic::NLL && !_doBinOffset && _simCount > 1) {
-      result += weightSum * std::log(static_cast<double>(_simCount));
+      result += weightSum * _logSimCount;
    }
 
    // Check if value offset flag is set.

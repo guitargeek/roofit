@@ -623,7 +623,7 @@ class TestRooDataSetNumpy(unittest.TestCase):
             if is_in_range:
                 n_in_range = n_in_range + 1
 
-        dataset_numpy = ROOT.RooDataSet.from_numpy(data, {x, cat}, name="dataSetNumpy")
+        dataset_numpy = ROOT.RooDataSet.from_numpy(data, [x, cat], name="dataSetNumpy")
 
         self.assertEqual(dataset_numpy.numEntries(), n_in_range)
 
@@ -699,12 +699,12 @@ class TestRooGlobalFunc(unittest.TestCase):
 
         n_events = 1000
 
-        data = g.generate({x}, NumEvents=n_events)
+        data = g.generate([x], NumEvents=n_events)
 
         sample = ROOT.RooCategory("cat", "cat")
         sample.defineType("cat_0")
 
-        data_2 = ROOT.RooDataSet("data_2", "data_2", {x}, Index=sample, Link={"cat_0": data})
+        data_2 = ROOT.RooDataSet("data_2", "data_2", [x], Index=sample, Link={"cat_0": data})
 
         self.assertEqual(data_2.numEntries(), n_events)
 
@@ -712,15 +712,6 @@ class TestRooGlobalFunc(unittest.TestCase):
         """C++ object returned by RooFit::Minimizer should not be double deleted"""
         # ROOT-9516
         minimizer = ROOT.RooFit.Minimizer("Minuit2", "migrad")  # noqa: F841
-
-
-class TestRooJSONFactoryWSTool(unittest.TestCase):
-    """
-    Test for RooJSONFactoryWSTool pythonizations.
-    """
-
-    def test_writedoc(self):
-        ROOT.RooJSONFactoryWSTool.writedoc("roojsonfactorywstool_test_writedoc.tex")
 
 
 class TestRooLinkedList(unittest.TestCase):

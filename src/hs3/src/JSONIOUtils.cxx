@@ -1,11 +1,51 @@
 #include "JSONIOUtils.h"
 
-#include <RooAbsBinning.h>
+#include <RooAbsLValue.h>
+#include <RooArgList.h>
+#include <RooCategory.h>
+#include <RooConstVar.h>
+#include <RooDataHist.h>
+#include <RooSuperCategory.h>
+#include <RooWorkspace.h>
+#include <RooStats/HistFactory/ParamHistFunc.h>
+#include <RooFitHS3/RooJSONFactoryWSTool.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <set>
+#include <sstream>
 #include <string>
+#include <utility>
 
 using RooFit::Detail::JSONNode;
-using RooFit::Detail::JSONTree;
+
+std::optional<double> toNumber(const std::string &str)
+{
+   // std::from_chars for floating-point types is not portably available on all
+   // platforms ROOT supports, so we rely on the stream extraction.
+   std::istringstream stream(str);
+   double value = 0.0;
+   return (stream >> value) && stream.eof() ? std::optional<double>{value} : std::nullopt;
+}
+
+// True if `arg` is a RooConstVar whose name is a plain number (i.e. a literal constant).
+bool isLiteralConstVar(RooAbsArg const &arg)
+{
+   return dynamic_cast<RooConstVar const *>(&arg) && toNumber(arg.GetName());
+}
+
+// Write a reference to `arg`: the value if it is a literal constant, and the name otherwise.
+void writeReference(JSONNode &node, RooAbsArg const &arg)
+{
+   if (isLiteralConstVar(arg)) {
+      node << static_cast<RooConstVar const &>(arg).getVal();
+   } else {
+      node << arg.GetName();
+   }
+}
 
 bool startsWith(std::string_view str, std::string_view prefix)
 {
@@ -25,78 +65,269 @@ std::string removeSuffix(std::string_view str, std::string_view suffix)
    return out;
 }
 
-std::unique_ptr<RooFit::Detail::JSONTree> varJSONString(const JSONNode &treeRoot)
+namespace {
+
+constexpr std::string_view literalPrefix = "const_";
+
+// The shortest decimal representation of a value that is read back as the same value.
+std::string shortestNumber(double value)
 {
-   std::string varName = treeRoot.find("name")->val();
-   double val = 0;
-   double maxVal = 0;
-   double minVal = 0;
-   bool isConstant = false;
-   bool isRange = false;
-
-   if (auto n = treeRoot.find("value")) {
-      val = n->val_double();
-      isConstant = true;
+   char buffer[32];
+   for (int precision = 1; precision <= 17; ++precision) {
+      std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+      if (std::strtod(buffer, nullptr) == value) {
+         break;
+      }
    }
-
-   auto maxNode = treeRoot.find("max");
-   auto minNode = treeRoot.find("min");
-   if (maxNode && minNode) {
-      maxVal = maxNode->val_double();
-      minVal = minNode->val_double();
-      isRange = true;
-   }
-   if (!isConstant) {
-      val = (maxVal + minVal) / 2;
-   }
-   // Check if variable is at least a range or constant else throw error
-   if (!isConstant && !isRange) {
-      throw std::invalid_argument("Invalid Syntax: Please provide either 'value' or 'min' and 'max' or both");
-   }
-
-   std::unique_ptr<RooFit::Detail::JSONTree> jsonDict = RooFit::Detail::JSONTree::create();
-   JSONNode &n = jsonDict->rootnode().set_map();
-   JSONNode &_domains = n["domains"].set_seq().append_child().set_map();
-   JSONNode &_parameterPoints = n["parameter_points"].set_seq().append_child().set_map();
-
-   _domains["name"] << "default_domain";
-   _domains["type"] << "product_domain";
-   JSONNode &_axes = _domains["axes"].set_seq().append_child().set_map();
-   _axes["name"] << varName;
-
-   _parameterPoints["name"] << "default_values";
-   JSONNode &_parameters = _parameterPoints["parameters"].set_seq().append_child().set_map();
-   _parameters["name"] << varName;
-   _parameters["value"] << val;
-
-   if (isRange) {
-      _axes["max"] << maxVal;
-      _axes["min"] << minVal;
-   }
-
-   if (isConstant && !isRange) {
-      _parameters["const"] << true;
-      JSONNode &_misc = n["misc"].set_map();
-      JSONNode &rootInternal = _misc["ROOT_internal"].set_map();
-      JSONNode &_var = rootInternal[varName].set_map();
-      _var["tags"] << "Constant";
-   }
-
-   return jsonDict;
+   return buffer;
 }
 
-void writeAxisBinning(JSONNode &node, const RooAbsBinning &binning)
+// The number that the identifier of a literal constant spells, or an empty string if `name` is no such identifier.
+std::string numberOfLiteralIdentifier(std::string_view name)
 {
-   if (binning.isUniform()) {
-      node["min"] << binning.lowBound();
-      node["max"] << binning.highBound();
-      node["nbins"] << binning.numBins();
-      return;
+   if (!startsWith(name, literalPrefix) || name.size() == literalPrefix.size()) {
+      return "";
    }
+   std::string number;
+   for (char c : name.substr(literalPrefix.size())) {
+      if (c == 'p') {
+         number += '.';
+      } else if (c == 'm') {
+         number += '-';
+      } else if (std::isdigit(static_cast<unsigned char>(c)) || c == 'e') {
+         number += c;
+      } else {
+         return "";
+      }
+   }
+   char *end = nullptr;
+   std::strtod(number.c_str(), &end);
+   return end == number.c_str() + number.size() ? number : "";
+}
 
-   auto &edges = node["edges"].set_seq();
-   edges.append_child() << binning.binLow(0);
-   for (int i = 0; i < binning.numBins(); ++i) {
-      edges.append_child() << binning.binHigh(i);
+} // namespace
+
+std::string transformedArgument(RooAbsReal const &param)
+{
+   if (!isLiteralConstVar(param)) {
+      return param.GetName();
    }
+   // In parentheses if negative, such that "-%s" doesn't become "--1".
+   const std::string number = shortestNumber(param.getVal());
+   return number[0] == '-' ? "(" + number + ")" : number;
+}
+
+std::string transformedBaseName(RooAbsReal const &param)
+{
+   if (!isLiteralConstVar(param)) {
+      return param.GetName();
+   }
+   std::string out{literalPrefix};
+   for (char c : shortestNumber(param.getVal())) {
+      if (c == '.') {
+         out += 'p';
+      } else if (c == '-') {
+         out += 'm';
+      } else if (c != '+') {
+         out += c;
+      }
+   }
+   return out;
+}
+
+bool isLiteralIdentifier(std::string_view name)
+{
+   return !numberOfLiteralIdentifier(name).empty();
+}
+
+std::string transformedOriginal(std::string_view name, std::string_view suffix)
+{
+   const std::string base = removeSuffix(name, suffix);
+   const std::string number = numberOfLiteralIdentifier(base);
+   return number.empty() ? base : number;
+}
+
+namespace {
+
+std::vector<std::size_t> numBinsPerVariable(RooAbsCollection const &vars)
+{
+   std::vector<std::size_t> nBins;
+   for (RooAbsArg const *var : vars) {
+      nBins.push_back(static_cast<std::size_t>(dynamic_cast<RooAbsLValue const &>(*var).numBins()));
+   }
+   return nBins;
+}
+
+// The position in TH1 order (first variable fastest) of the bin with position `k` in RooDataHist/HS3 order (last
+// variable fastest).
+std::size_t th1Position(std::size_t k, std::vector<std::size_t> const &nBins)
+{
+   std::size_t th1 = 0;
+   std::size_t stride = 1;
+   std::vector<std::size_t> indices(nBins.size());
+   for (std::size_t j = nBins.size(); j-- > 0;) {
+      indices[j] = k % nBins[j];
+      k /= nBins[j];
+   }
+   for (std::size_t j = 0; j < nBins.size(); ++j) {
+      th1 += indices[j] * stride;
+      stride *= nBins[j];
+   }
+   return th1;
+}
+
+} // namespace
+
+std::unique_ptr<RooArgSet>
+histogramVariablesNamedAfterObservables(RooDataHist const &dh, RooArgSet const &histObs, RooArgSet const &funcObs)
+{
+   auto out = std::make_unique<RooArgSet>();
+   for (RooAbsArg *var : *dh.get()) {
+      std::string name = var->GetName();
+      for (std::size_t i = 0; i < histObs.size() && i < funcObs.size(); ++i) {
+         if (name == histObs[i]->GetName() && dynamic_cast<RooAbsLValue const *>(funcObs[i])) {
+            name = funcObs[i]->GetName();
+            break;
+         }
+      }
+      out->addOwned(std::unique_ptr<RooAbsArg>{static_cast<RooAbsArg *>(var->clone(name.c_str()))});
+   }
+   return out;
+}
+
+std::vector<RooAbsReal *> paramHistFuncParamsInBinOrder(ParamHistFunc const &func)
+{
+   std::vector<RooAbsReal *> out;
+   for (int k = 0; k < func.numBins(); ++k) {
+      out.push_back(&func.getParameter(k));
+   }
+   return out;
+}
+
+RooArgList toParamHistFuncOrder(RooArgList const &paramsInBinOrder, RooAbsCollection const &vars)
+{
+   const std::vector<std::size_t> nBins = numBinsPerVariable(vars);
+   std::vector<RooAbsArg *> th1Order(paramsInBinOrder.size(), nullptr);
+   for (std::size_t k = 0; k < paramsInBinOrder.size(); ++k) {
+      const std::size_t t = th1Position(k, nBins);
+      if (t >= th1Order.size()) {
+         RooJSONFactoryWSTool::error("the number of parameters does not match the number of bins");
+      }
+      th1Order[t] = paramsInBinOrder.at(k);
+   }
+   RooArgList out;
+   for (RooAbsArg *arg : th1Order) {
+      out.add(*arg);
+   }
+   return out;
+}
+
+void checkParamHistFuncOrderIsDefined(RooFit::HS3::Version const &version, RooAbsCollection const &vars,
+                                      std::string const &context)
+{
+   if (vars.size() >= 2 && version < RooFit::HS3::Version{0, 3}) {
+      RooJSONFactoryWSTool::error(context +
+                                  " has a multi-dimensional binning. Documents before HS3 0.3 don't define the order "
+                                  "of its per-bin parameters (RooFit wrote them in TH1 order, while the bin "
+                                  "contents use the order of HS3 0.3, last axis fastest). Please re-export the "
+                                  "workspace with a newer ROOT version.");
+   }
+}
+
+namespace {
+
+void sortByName(std::vector<RooCategory const *> &columns)
+{
+   std::sort(columns.begin(), columns.end(),
+             [](RooCategory const *l, RooCategory const *r) { return std::strcmp(l->GetName(), r->GetName()) < 0; });
+}
+
+} // namespace
+
+std::vector<RooCategory const *> selectionColumns(RooAbsCategory const &indexCat)
+{
+   std::vector<RooCategory const *> columns;
+   auto addColumn = [&](RooAbsArg const &arg) {
+      auto *cat = dynamic_cast<RooCategory const *>(&arg);
+      if (!cat) {
+         RooJSONFactoryWSTool::error("the index category '" + std::string(arg.GetName()) + "' is a " + arg.ClassName() +
+                                     ", but only a RooCategory or a RooSuperCategory of RooCategories " +
+                                     "can be written as the columns of a combined distribution");
+      }
+      columns.push_back(cat);
+   };
+   if (auto *super = dynamic_cast<RooSuperCategory const *>(&indexCat)) {
+      for (RooAbsArg const *input : super->inputCatList()) {
+         addColumn(*input);
+      }
+   } else {
+      addColumn(indexCat);
+   }
+   sortByName(columns);
+   return columns;
+}
+
+std::vector<RooCategory const *> selectionColumns(RooAbsCollection const &vars)
+{
+   std::vector<RooCategory const *> columns;
+   for (RooAbsArg const *arg : vars) {
+      if (auto *cat = dynamic_cast<RooCategory const *>(arg)) {
+         columns.push_back(cat);
+      }
+   }
+   sortByName(columns);
+   return columns;
+}
+
+std::vector<std::vector<std::string>> selectionKeys(std::vector<RooCategory const *> const &columns)
+{
+   std::vector<std::vector<std::string>> keys{{}};
+   for (RooCategory const *column : columns) {
+      std::vector<std::vector<std::string>> next;
+      for (auto const &key : keys) {
+         for (unsigned int i = 0; i < column->size(); ++i) {
+            next.push_back(key);
+            next.back().push_back(column->getOrdinal(i).first);
+         }
+      }
+      keys = std::move(next);
+   }
+   return keys;
+}
+
+std::string selectionLabel(std::vector<std::string> const &key)
+{
+   if (key.size() == 1) {
+      return key.front();
+   }
+   std::string label = "{";
+   for (std::size_t i = 0; i < key.size(); ++i) {
+      label += (i == 0 ? "" : ";") + key[i];
+   }
+   return label + "}";
+}
+
+std::string selectionKeyToString(std::vector<std::string> const &key)
+{
+   std::string out = "[";
+   for (std::size_t i = 0; i < key.size(); ++i) {
+      out += (i == 0 ? "\"" : ", \"") + key[i] + "\"";
+   }
+   return out + "]";
+}
+
+std::string selectionLabel(RooAbsCategory const &indexCat, std::vector<RooCategory const *> const &columns,
+                           std::vector<std::string> const &key)
+{
+   auto *super = dynamic_cast<RooSuperCategory const *>(&indexCat);
+   if (!super) {
+      return key.front();
+   }
+   std::vector<std::string> inInputOrder;
+   for (RooAbsArg const *input : super->inputCatList()) {
+      auto found = std::find_if(columns.begin(), columns.end(),
+                                [&](RooCategory const *c) { return std::strcmp(c->GetName(), input->GetName()) == 0; });
+      inInputOrder.push_back(key[found - columns.begin()]);
+   }
+   return selectionLabel(inInputOrder);
 }

@@ -29,25 +29,6 @@ if(TARGET RooFitMultiProcess)
   list(APPEND EXTRA_DEPENDENCIES ${roofit_minuit2_library})
 endif()
 
-if(roofit_legacy_eval_backend)
-  set(LegacyEvalBackendSources
-    src/BidirMMapPipe.cxx
-    src/RooAbsOptTestStatistic.cxx
-    src/RooAbsTestStatistic.cxx
-    src/RooChi2Var.cxx
-    src/RooNLLVar.cxx
-    src/RooRealMPFE.cxx
-  )
-  set(LegacyEvalBackendHeaders
-    src/BidirMMapPipe.h
-    src/RooAbsOptTestStatistic.h
-    src/RooAbsTestStatistic.h
-    src/RooChi2Var.h
-    src/RooNLLVar.h
-    src/RooRealMPFE.h
-  )
-endif()
-
 add_library(RooFitCore SHARED)
 
 set(ROOFITCORE_HEADERS
@@ -245,7 +226,6 @@ set(ROOFITCORE_HEADERS
     RooTable.h
     RooTemplateProxy.h
     RooThresholdCategory.h
-    RooTrace.h
     RooTreeDataStore.h
     RooTruthModel.h
     RooUniformBinning.h
@@ -444,7 +424,6 @@ set(sources_cxx
     src/RooTFormulaEvaluator.cxx
     src/RooTObjWrap.cxx
     src/RooThresholdCategory.cxx
-    src/RooTrace.cxx
     src/RooTreeDataStore.cxx
     src/RooTruthModel.cxx
     src/RooUniformBinning.cxx
@@ -463,7 +442,6 @@ set(sources_cxx
     src/TestStatistics/RooUnbinnedL.cxx
     src/TestStatistics/buildLikelihood.cxx
     src/TestStatistics/SharedOffset.cxx
-    ${LegacyEvalBackendSources}
     ${RooFitMPTestStatisticsSources}
 )
 
@@ -527,10 +505,6 @@ endif()
 
 # The following definitions are PUBLIC so they can also be used in ROOT-internal tests
 
-if(roofit_legacy_eval_backend)
-  target_compile_definitions(RooFitCore PUBLIC ROOFIT_LEGACY_EVAL_BACKEND)
-endif()
-
 if(TARGET RooFitMultiProcess)
   target_compile_definitions(RooFitCore PUBLIC ROOFIT_MULTIPROCESS)
 endif()
@@ -551,18 +525,6 @@ if(cuda)
   target_compile_definitions(RooFitCore PUBLIC ROOFIT_CUDA)
 endif()
 
-if(fftw3)
-  target_compile_definitions(RooFitCore PUBLIC ROOFIT_MATH_FFTW3)
-  # In the ROOT build, the FFTW::Double target is created by the main build
-  # system. Here, we have to look it up ourselves.
-  if(NOT TARGET FFTW::Double)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FFTW3 REQUIRED IMPORTED_TARGET fftw3)
-    add_library(FFTW::Double ALIAS PkgConfig::FFTW3)
-  endif()
-  target_link_libraries(RooFitCore PRIVATE FFTW::Double)
-endif()
-
 # Used to silence deprecation warnings when testing deprecated features
 target_compile_definitions(RooFitCore PUBLIC ROOFIT_BUILDS_ITSELF)
 
@@ -579,49 +541,46 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
   target_compile_options(RooFitCore PUBLIC -fno-math-errno)
 endif()
 
-if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
-  target_sources(
-      RooFitCore
-      PRIVATE
-      FILE_SET private_header_files
-      TYPE HEADERS
-      BASE_DIRS inc/ res/ src/
-      FILES
-          ${RELATIVE_INC_HEADERS}
-          inc/LinkDef.h
-          inc/RooFit/UniqueId.h # Was not being included in ROOT_STL_PACKAGE call
-          src/RooConvIntegrandBinding.h
-          src/RooFormulaUtils.h
-          src/RooFormulaEvaluator.h
-          src/RooTFormulaEvaluator.h
-          src/RooFitLegacy/RooAbsCategoryLegacyIterator.h
-          src/RooMCIntegrator.h
-          src/RooFoamGenerator.h
-          src/RooAbsMinimizerFcn.h
-          src/RooSentinel.h
-          src/RooAcceptReject.h
-          src/TreeReadBuffer.h
-          src/ConstraintHelpers.h
-          src/RooRombergIntegrator.h
-          src/RooBinIntegrator.h
-          ${RooFitMPTestStatisticsHeaders}
-          ${LegacyEvalBackendHeaders}
-          src/RooFit/BatchModeDataHelpers.h
-          src/RooMinimizerFcn.h
-          src/RooAbsNumGenerator.h
-          src/FitHelpers.h
-          src/RooGenProdProj.h
-          src/RooNumGenFactory.h
-          src/RooGrid.h
-          src/RooAddHelpers.h
-          src/RooAdaptiveIntegratorND.h
-          src/ValueChecking.h
-          src/RooImproperIntegrator1D.h
-          res/RooFitImplHelpers.h
-          res/RooMinuit2Helpers.h
-          res/RooUnitTest.h
-  )
-endif()
+target_sources(
+    RooFitCore
+    PRIVATE
+    FILE_SET private_header_files
+    TYPE HEADERS
+    BASE_DIRS inc/ res/ src/
+    FILES
+        ${RELATIVE_INC_HEADERS}
+        inc/LinkDef.h
+        inc/RooFit/UniqueId.h # Was not being included in ROOT_STL_PACKAGE call
+        src/RooConvIntegrandBinding.h
+        src/RooFormulaUtils.h
+        src/RooFormulaEvaluator.h
+        src/RooTFormulaEvaluator.h
+        src/RooFitLegacy/RooAbsCategoryLegacyIterator.h
+        src/RooMCIntegrator.h
+        src/RooFoamGenerator.h
+        src/RooAbsMinimizerFcn.h
+        src/RooSentinel.h
+        src/RooAcceptReject.h
+        src/TreeReadBuffer.h
+        src/ConstraintHelpers.h
+        src/RooRombergIntegrator.h
+        src/RooBinIntegrator.h
+        ${RooFitMPTestStatisticsHeaders}
+        src/RooFit/BatchModeDataHelpers.h
+        src/RooMinimizerFcn.h
+        src/RooAbsNumGenerator.h
+        src/FitHelpers.h
+        src/RooGenProdProj.h
+        src/RooNumGenFactory.h
+        src/RooGrid.h
+        src/RooAddHelpers.h
+        src/RooAdaptiveIntegratorND.h
+        src/ValueChecking.h
+        src/RooImproperIntegrator1D.h
+        res/RooFitImplHelpers.h
+        res/RooMinuit2Helpers.h
+        res/RooUnitTest.h
+)
 
 if(testing)
   add_subdirectory(test)

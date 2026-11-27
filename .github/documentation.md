@@ -35,7 +35,6 @@ cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -Droofit=OFF \
       -Dvdt=OFF \
       -Dtestsupport=ON \
-      -Dfftw3=ON \
       -DCMAKE_INSTALL_PREFIX=../root_install ../root_src
 
 cmake --build . --target install -j24

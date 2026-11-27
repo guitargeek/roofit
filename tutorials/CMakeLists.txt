@@ -93,19 +93,6 @@ if(NOT mathmore)
                     roostats/TestNonCentral.py)
 endif()
 
-if(NOT fftw3)
-  # Without FFTW, RooFFTConvPdf falls back to a jitted DFT that is far too slow
-  # for these tutorials.
-  set(fftw3_veto roofit/rf208_convolution.C
-                 roofit/rf210_angularconv.C
-                 roofit/rf211_paramconv.C
-                 roofit/rf512_wsfactory_oper.C
-                 roofit/rf208_convolution.py
-                 roofit/rf210_angularconv.py
-                 roofit/rf211_paramconv.py
-                 roofit/rf512_wsfactory_oper.py)
-endif()
-
 if(NOT ROOT_dataframe_FOUND)
   set(dataframe_veto roofit/rf408_RDataFrameToRooFit.C
                      roofit/rf408_RDataFrameToRooFit.py)
@@ -165,7 +152,6 @@ set(all_veto ${extra_veto}
              ${gui_veto}
              ${xml_veto}
              ${mathmore_veto}
-             ${fftw3_veto}
              ${dataframe_veto}
              ${standalone_veto}
              )

@@ -289,14 +289,15 @@ public:
       const int gridSize = getGridSize(nEvents);
       _computeFunctions[computer]<<<gridSize, blockSize, 0, stream>>>(*batchesDevice);
 
-      // Only the NormalizedPdf computer mutates its extra args: it uses them
-      // as output parameters for the evaluation error counts. Instead of
-      // synchronizing the stream to read the counters back immediately, the
-      // readback is deferred to avoid stalling the pipeline: an asynchronous
-      // copy delivers them into a persistent pinned buffer, and the next
-      // synchronizeCudaStream() call forwards them to the caller's span. The
-      // caller's memory therefore has to stay valid until then.
-      if (computer == NormalizedPdf && !extraArgs.empty()) {
+      // Only the NormalizedPdf and LogNormalizedPdf computers mutate their
+      // extra args: they use them as output parameters for the evaluation
+      // error counts. Instead of synchronizing the stream to read the counters
+      // back immediately, the readback is deferred to avoid stalling the
+      // pipeline: an asynchronous copy delivers them into a persistent pinned
+      // buffer, and the next synchronizeCudaStream() call forwards them to the
+      // caller's span. The caller's memory therefore has to stay valid until
+      // then.
+      if ((computer == NormalizedPdf || computer == LogNormalizedPdf) && !extraArgs.empty()) {
          const std::size_t nBytes = extraArgs.size() * sizeof(double);
          StreamScratch::DeferredSlot &deferredSlot = streamScratch.acquireDeferred(nBytes);
          ERRCHECK(cudaMemcpyAsync(deferredSlot.host, extraArgsDevice, nBytes, cudaMemcpyDeviceToHost, stream));
@@ -309,7 +310,8 @@ public:
    /// Return the sum of an input array
    double reduceSum(RooBatchCompute::Config const &cfg, InputArr input, size_t n) override;
    ReduceNLLOutput reduceNLL(RooBatchCompute::Config const &cfg, std::span<const double> probas,
-                             std::span<const double> weights, std::span<const double> offsetProbas) override;
+                             std::span<const double> weights, std::span<const double> offsetProbas,
+                             bool logProbas) override;
 
    std::unique_ptr<AbsBufferManager> createBufferManager() const override;
 
@@ -405,9 +407,10 @@ __global__ void kahanSum(const double *__restrict__ input, const double *__restr
 /// into a "badness" value that the host can pack into a NaN for the error
 /// recovery in the minimizer. The `stats` output has the layout
 /// [badness, nNonPositive, nNaN, nInfinite] and must be zero-initialized.
+/// With `logProbas`, the probabilities are given as logarithms.
 __global__ void nllSumKernel(const double *__restrict__ probas, const double *__restrict__ weights,
                              const double *__restrict__ offsetProbas, size_t nProbas, double scalarProba,
-                             size_t nWeights, double *__restrict__ result, double *__restrict__ stats)
+                             bool logProbas, size_t nWeights, double *__restrict__ result, double *__restrict__ stats)
 {
    int thIdx = threadIdx.x;
    int gthIdx = thIdx + blockIdx.x * blockSize;
@@ -433,7 +436,17 @@ __global__ void nllSumKernel(const double *__restrict__ probas, const double *__
       }
       const double proba = nProbas == 1 ? scalarProba : probas[i];
       double term;
-      if (proba <= 0.0) {
+      if (logProbas) {
+         if (std::isnan(proba)) {
+            ++nNaN;
+            badness += RooNaNPacker::unpackNaN(proba);
+         } else if (proba == -INFINITY) {
+            ++nNonPositive;
+         } else if (std::isinf(proba)) {
+            ++nInfinite;
+         }
+         term = proba;
+      } else if (proba <= 0.0) {
          ++nNonPositive;
          badness += -proba;
          term = std::log(proba);
@@ -485,8 +498,8 @@ double RooBatchComputeClass::reduceSum(RooBatchCompute::Config const &cfg, Input
    auto devOut = reinterpret_cast<double *>(slot.device);
    auto hostOut = reinterpret_cast<double *>(slot.host);
    constexpr int shMemSize = 2 * blockSize * sizeof(double);
-   kahanSum<<<gridSize, blockSize, shMemSize, stream>>>(input, nullptr, n, devOut, 0);
-   kahanSum<<<1, blockSize, shMemSize, stream>>>(devOut, devOut + gridSize, gridSize, devOut, 0);
+   kahanSum<<<gridSize, blockSize, shMemSize, stream>>>(input, nullptr, n, devOut, false);
+   kahanSum<<<1, blockSize, shMemSize, stream>>>(devOut, devOut + gridSize, gridSize, devOut, false);
    CudaInterface::copyDeviceToHost(devOut, hostOut, 1, cfg.cudaStream());
    // Release right after the last enqueued use of the slot, so that the slot
    // is protected by its event even if the synchronization below throws.
@@ -496,7 +509,8 @@ double RooBatchComputeClass::reduceSum(RooBatchCompute::Config const &cfg, Input
 }
 
 ReduceNLLOutput RooBatchComputeClass::reduceNLL(RooBatchCompute::Config const &cfg, std::span<const double> probas,
-                                                std::span<const double> weights, std::span<const double> offsetProbas)
+                                                std::span<const double> weights, std::span<const double> offsetProbas,
+                                                bool logProbas)
 {
    ReduceNLLOutput out;
    if (probas.empty()) {
@@ -528,7 +542,7 @@ ReduceNLLOutput RooBatchComputeClass::reduceNLL(RooBatchCompute::Config const &c
 
    nllSumKernel<<<gridSize, blockSize, shMemSize, stream>>>(
       probas.data(), weights.data(), offsetProbas.empty() ? nullptr : offsetProbas.data(), probas.size(),
-      probas.size() == 1 ? probas[0] : 0.0, weights.size(), devOut + 6, devOut + 2);
+      probas.size() == 1 ? probas[0] : 0.0, logProbas, weights.size(), devOut + 6, devOut + 2);
 
    kahanSum<<<1, blockSize, shMemSize, stream>>>(devOut + 6, devOut + 6 + gridSize, gridSize, devOut, 0);
 

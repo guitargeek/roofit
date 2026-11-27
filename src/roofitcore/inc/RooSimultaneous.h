@@ -35,23 +35,9 @@ class RooFitResult ;
 class RooPlot ;
 class RooAbsData ;
 class RooLinkedList ;
-class RooSuperCategory ;
 
 class RooSimultaneous : public RooAbsPdf {
 public:
-
-  /// Internal struct used for initialization.
-  struct InitializationOutput {
-
-     ~InitializationOutput();
-
-     void addPdf(const RooAbsPdf &pdf, std::string const &catLabel);
-
-     std::vector<RooAbsPdf const *> finalPdfs;
-     std::vector<std::string> finalCatLabels;
-     RooAbsCategoryLValue *indexCat = nullptr;
-     std::unique_ptr<RooSuperCategory> superIndex;
-  };
 
   // Constructors, assignment etc
   inline RooSimultaneous() : _partIntMgr(this,10) {}
@@ -70,9 +56,11 @@ public:
   ExtendMode extendMode() const override ;
 
   double expectedEvents(const RooArgSet* nset) const override ;
+  std::unique_ptr<RooAbsReal> createExpectedEventsFunc(const RooArgSet *nset) const override;
 
   bool forceAnalyticalInt(const RooAbsArg&) const override { return true ; }
-  Int_t getAnalyticalIntegralWN(RooArgSet& allVars, RooArgSet& numVars, const RooArgSet* normSet, const char* rangeName=nullptr) const override ;
+  Int_t getAnalyticalIntegralWN(RooArgSet &allVars, RooArgSet &analVars, const RooArgSet *normSet,
+                                const char *rangeName = nullptr) const override;
   double analyticalIntegralWN(Int_t code, const RooArgSet* normSet, const char* rangeName=nullptr) const override ;
 
   using RooAbsPdf::plotOn ;
@@ -111,15 +99,16 @@ public:
 
 protected:
 
-  void selectNormalization(const RooArgSet* depSet=nullptr, bool force=false) override ;
+  void selectNormalization(const RooArgSet* normSet=nullptr, bool force=false) override ;
   void selectNormalizationRange(const char* rangeName=nullptr, bool force=false) override ;
 
   std::unique_ptr<RooAbsReal>
   createAsymmetryComponent(const RooAbsCategoryLValue &asymCat, const RooAbsCategoryLValue &asymCatState) const override;
 
   RooArgSet const& flattenedCatList() const;
+  bool indexCatIsInNormSet(RooArgSet const *nset) const;
 
-  mutable RooSetProxy _plotCoefNormSet ;
+  RooSetProxy _plotCoefNormSet;
   const TNamed* _plotCoefNormRange = nullptr;
 
   class CacheElem : public RooAbsCacheElement {
@@ -139,12 +128,7 @@ protected:
 
 private:
 
-  /// Private internal constructor.
-  RooSimultaneous(const char *name, const char *title, InitializationOutput && initInfo);
-
-  static std::unique_ptr<RooSimultaneous::InitializationOutput>
-  initialize(std::string const& name, RooAbsCategoryLValue &inIndexCat,
-             std::map<std::string, RooAbsPdf *> const &pdfMap);
+  static RooAbsPdf *resolveSwitchMode(RooAbsPdf *pdf, RooArgSet const &vars);
 
   mutable std::unique_ptr<RooArgSet> _indexCatSet ; ///<! Index category wrapped in a RooArgSet if needed internally
 

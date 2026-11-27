@@ -28,30 +28,28 @@ target_link_libraries(RooBatchCompute_GENERIC PUBLIC RooBatchCompute)
 install(TARGETS RooBatchCompute_GENERIC LIBRARY DESTINATION lib)
 target_compile_options(RooBatchCompute_GENERIC  PRIVATE ${common-flags} -DRF_ARCH=GENERIC)
 
-if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
-  target_sources(
-      RooBatchCompute
+target_sources(
+    RooBatchCompute
+    PRIVATE
+    FILE_SET private_header_files
+    TYPE HEADERS
+    BASE_DIRS res/
+    FILES
+        res/RooBatchCompute.h
+)
+target_sources(
+      RooBatchCompute_GENERIC
       PRIVATE
       FILE_SET private_header_files
       TYPE HEADERS
-      BASE_DIRS res/
+      BASE_DIRS src/ res/
       FILES
-          res/RooBatchCompute.h
-  )
-  target_sources(
-        RooBatchCompute_GENERIC
-        PRIVATE
-        FILE_SET private_header_files
-        TYPE HEADERS
-        BASE_DIRS src/ res/
-        FILES
-            res/RooBatchComputeTypes.h
-            res/RooHeterogeneousMath.h
-            res/RooNaNPacker.h
-            src/Batches.h
-            src/RooVDTHeaders.h
-  )
-endif()
+          res/RooBatchComputeTypes.h
+          res/RooHeterogeneousMath.h
+          res/RooNaNPacker.h
+          src/Batches.h
+          src/RooVDTHeaders.h
+)
 
 # Windows platform and ICC compiler need special code and testing, thus the feature has not been implemented yet for these.
 if (ROOT_PLATFORM MATCHES "linux|macosx" AND CMAKE_SYSTEM_PROCESSOR MATCHES x86_64 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -88,17 +86,15 @@ if (cuda)
   target_link_libraries(RooBatchCompute_CUDA   PUBLIC RooBatchCompute)
   target_compile_options(RooBatchCompute_CUDA  PRIVATE -lineinfo --expt-relaxed-constexpr)
   install(TARGETS RooBatchCompute_CUDA LIBRARY DESTINATION lib)
-  if(NOT CMAKE_VERSION VERSION_LESS "3.23.0")
-    target_sources(
-        RooBatchCompute_CUDA
-        PRIVATE
-        FILE_SET private_header_files
-        TYPE HEADERS
-        BASE_DIRS src/
-        FILES
-            src/CudaInterface.h
-    )
-  endif()
+  target_sources(
+      RooBatchCompute_CUDA
+      PRIVATE
+      FILE_SET private_header_files
+      TYPE HEADERS
+      BASE_DIRS src/
+      FILES
+          src/CudaInterface.h
+  )
 endif()
 
 if(vdt OR builtin_vdt)
