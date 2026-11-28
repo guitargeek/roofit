@@ -12,6 +12,7 @@ Note that this repository is *work in progress*. It doesn't support building all
 
 The first step is to get a ROOT build that was compiled without RooFit as a base for your developments.
 In other words, a ROOT build that was configured with `-Droofit=OFF`.
+It has to be ROOT 6.42 or newer.
 Such builds are collected on [this website with custom ROOT binaries](https://rembserj.web.cern.ch/data/binaries/).
 If binaries for your preferred platform are not available, please get in touch with us.
 

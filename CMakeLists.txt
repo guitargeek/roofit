@@ -5,7 +5,8 @@ project(RooFit
     LANGUAGES CXX)
 
 
-find_package(ROOT REQUIRED COMPONENTS Core MathCore Minuit Tree)
+# The oldest ROOT release that has what this RooFit uses from the rest of ROOT.
+find_package(ROOT 6.42 REQUIRED COMPONENTS Core MathCore Minuit Tree)
 include(${ROOT_USE_FILE})
 
 # Like ROOT, install into lib and not into lib64. This has to happen before
@@ -85,17 +86,6 @@ if(clad AND NOT builtin_clad AND NOT ROOT_clad_FOUND)
 endif()
 
 add_subdirectory(src)
-
-# compat/ holds headers that shadow headers of the ROOT installation to work
-# around problems with the ROOT versions this repository is built against. They
-# are attached to RooFitCore so that they end up on the include path of every
-# package and every test, and they are installed next to the RooFit headers so
-# that the install tree behaves like the build tree. See the files themselves
-# for what they fix; each one falls back to the ROOT header with #include_next.
-target_include_directories(RooFitCore PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/compat>
-  $<INSTALL_INTERFACE:include>)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/compat/" DESTINATION "include")
 
 if(pyroot)
   add_subdirectory(python)
@@ -208,27 +198,6 @@ if(testing)
     endif()
     if(pyroot)
       roofit_set_test_environment(${CMAKE_CURRENT_SOURCE_DIR}/python "${test_environment}")
-    endif()
-
-    # RooFitHS3.TutorialRF515RoundTrip reads rf515_hfJSON.json from
-    # gROOT->GetTutorialDir(), which is the tutorial directory of the RooFit-less
-    # ROOT installation, and expects the version of the file in
-    # tutorials/roofit/. Skip it as long as the installation has a different
-    # version, which happens when it is older than the RooFit of this
-    # repository.
-    set(rf515_json_root "${ROOT_BINDIR}/../tutorials/roofit/roofit/rf515_hfJSON.json")
-    set(rf515_json_here "${CMAKE_CURRENT_SOURCE_DIR}/tutorials/roofit/rf515_hfJSON.json")
-    set(rf515_json_same FALSE)
-    if(EXISTS "${rf515_json_root}")
-      file(SHA256 "${rf515_json_root}" rf515_json_root_hash)
-      file(SHA256 "${rf515_json_here}" rf515_json_here_hash)
-      if(rf515_json_root_hash STREQUAL rf515_json_here_hash)
-        set(rf515_json_same TRUE)
-      endif()
-    endif()
-    if(NOT rf515_json_same)
-      set_property(TEST gtest-src-hs3-testRooFitHS3 DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/hs3/test
-                   APPEND PROPERTY ENVIRONMENT_MODIFICATION "GTEST_FILTER=set:-RooFitHS3.TutorialRF515RoundTrip")
     endif()
   endif()
 endif()

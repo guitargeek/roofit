@@ -3,10 +3,24 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # This RooFit needs ROOT 6.42 or newer, which is in nixpkgs master since
+    # the commit below but has not reached nixos-unstable yet. Until it has,
+    # the ROOT package is taken from that commit and built with the packages
+    # of nixos-unstable. Then remove this input, use prev.root in the overlay
+    # again and update the lock file.
+    nixpkgs-root = {
+      url = "github:NixOS/nixpkgs/5f140ec899fb68508237038df26c621d9d97806f";
+      flake = false;
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      nixpkgs-root,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -24,42 +38,44 @@
       # that target when it was configured with -Dtestsupport=ON (or with
       # -Dtesting=ON, which implies it).
       overlay = final: prev: {
-        root-no-roofit = prev.root.overrideAttrs (old: {
-          pname = "root-no-roofit";
-          cmakeFlags = (old.cmakeFlags or [ ]) ++ [
-            # Debug symbols in the base ROOT, so you can also step into ROOT
-            # code when debugging RooFit.
-            "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
-            "-Droofit=OFF"
-            "-Dtmva=OFF"
-            "-Dtestsupport=ON"
-          ];
+        root-no-roofit =
+          (prev.callPackage "${nixpkgs-root}/pkgs/by-name/ro/root/package.nix" { }).overrideAttrs
+            (old: {
+              pname = "root-no-roofit";
+              cmakeFlags = (old.cmakeFlags or [ ]) ++ [
+                # Debug symbols in the base ROOT, so you can also step into ROOT
+                # code when debugging RooFit.
+                "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+                "-Droofit=OFF"
+                "-Dtmva=OFF"
+                "-Dtestsupport=ON"
+              ];
 
-          # ROOT builds clad through ExternalProject_Add, and that sub-build
-          # runs via a generated `cmake -P .../clad-build-*.cmake` wrapper
-          # which loses the make jobserver file descriptors. The sub-make
-          # therefore picks its own job count and runs *on top of* ROOT's own
-          # jobs, so it escapes the NIX_BUILD_CORES cap in preBuild below: we
-          # measured 15 concurrent cc1plus (3 ROOT + 12 clad) peaking at 19 GB,
-          # which OOM-kills the compiler.
-          #
-          # ROOT has a workaround that forces the clad sub-build to -j 1, but
-          # it is gated on CMake older than 3.31.1 -- the assumption being that
-          # newer CMake fixes jobserver propagation (Kitware issue 26398). That
-          # fix does not survive the `cmake -P` wrapper, and nixpkgs ships
-          # CMake 4.x, so the guard never fires. Drop the version condition and
-          # always serialize the clad sub-build.
-          postPatch = (old.postPatch or "") + ''
-            substituteInPlace interpreter/cling/tools/plugins/clad/CMakeLists.txt \
-              --replace-fail \
-                'if(NOT MSVC AND CMAKE_VERSION VERSION_LESS 3.31.1)' \
-                'if(NOT MSVC)'
-          '';
-          # The TestSupport library links against GTest::gtest, so ROOT needs to
-          # find GTest at build time.
-          buildInputs = (old.buildInputs or [ ]) ++ [ final.gtest ];
+              # ROOT builds clad through ExternalProject_Add, and that sub-build
+              # runs via a generated `cmake -P .../clad-build-*.cmake` wrapper
+              # which loses the make jobserver file descriptors. The sub-make
+              # therefore picks its own job count and runs *on top of* ROOT's own
+              # jobs, so it escapes the NIX_BUILD_CORES cap in preBuild below: we
+              # measured 15 concurrent cc1plus (3 ROOT + 12 clad) peaking at 19 GB,
+              # which OOM-kills the compiler.
+              #
+              # ROOT has a workaround that forces the clad sub-build to -j 1, but
+              # it is gated on CMake older than 3.31.1 -- the assumption being that
+              # newer CMake fixes jobserver propagation (Kitware issue 26398). That
+              # fix does not survive the `cmake -P` wrapper, and nixpkgs ships
+              # CMake 4.x, so the guard never fires. Drop the version condition and
+              # always serialize the clad sub-build.
+              postPatch = (old.postPatch or "") + ''
+                substituteInPlace interpreter/cling/tools/plugins/clad/CMakeLists.txt \
+                  --replace-fail \
+                    'if(NOT MSVC AND CMAKE_VERSION VERSION_LESS 3.31.1)' \
+                    'if(NOT MSVC)'
+              '';
+              # The TestSupport library links against GTest::gtest, so ROOT needs to
+              # find GTest at build time.
+              buildInputs = (old.buildInputs or [ ]) ++ [ final.gtest ];
 
-        });
+            });
       };
 
       forAllSystems =
@@ -169,6 +185,12 @@
             #
             # Add -Dclad_tests=ON to also build and run the test suite of the
             # builtin clad.
+            #
+            # When the ROOT of this shell changes, rebuild from scratch with
+            # `ninja -t clean && CCACHE_RECACHE=1 ninja`. The compiler wrapper
+            # puts the include directory of ROOT on the search path, so it is
+            # not on the compile commands, and neither ninja nor ccache notices
+            # that the ROOT headers changed: the old ones are still in the store.
             export CONFIGURE_ARGS=" \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_INSTALL_PREFIX=../install \
