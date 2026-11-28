@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.26)
 project(RooFit
-    VERSION 6.41.01
+    VERSION 6.43.01
     DESCRIPTION "RooFit"
     LANGUAGES CXX)
 
