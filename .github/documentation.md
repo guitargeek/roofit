@@ -2,7 +2,7 @@
 
 ## ROOT binaries without RooFit
 
-### ROOT 6.40.02 - Ubuntu 26.04
+### ROOT 6.42.00 - Ubuntu 26.04
 
 The resulting binary was uploaded here:
 <https://rembserj.web.cern.ch/rembserj/data/binaries/root_v6.32.04.ubuntu24.04.no-roofit.tar.gz>
@@ -14,7 +14,7 @@ docker run --security-opt label=disable -it registry.cern.ch/root-ci/ubuntu2604:
 
 In the container
 ```bash
-ROOT_VERSION=6.40.02
+ROOT_VERSION=6.42.00
 
 mkdir workspace
 cd workspace
@@ -29,6 +29,7 @@ cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -Dmathmore=ON \
       -Dfail-on-missing=ON \
       -Dfitsio=OFF \
+      -Dhttp=OFF \
       -Dmysql=OFF \
       -Dsqlite=OFF \
       -Dtmva=OFF \
@@ -49,7 +50,7 @@ tar -czvf $BINARY_NAME.tar.gz root
 
 On the host (figure out container name with `docker ps`):
 ```bash
-ROOT_VERSION=6.40.02
+ROOT_VERSION=6.42.00
 BINARY_NAME=root_v$ROOT_VERSION.ubuntu26.04.no-roofit.RelWithDebInfo
 docker cp <NAME>:workspace/$BINARY_NAME.tar.gz .
 ```

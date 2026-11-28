@@ -42,7 +42,7 @@ jobs:
       # Runs a set of commands using the runners shell
       - name: Download ROOT
         run: |
-          BINARY_NAME=root_v6.40.02.ubuntu26.04.no-roofit.RelWithDebInfo
+          BINARY_NAME=root_v6.42.00.ubuntu26.04.no-roofit.RelWithDebInfo
           wget -q https://rembserj.web.cern.ch/rembserj/data/binaries/$BINARY_NAME.tar.gz
           tar -xf $BINARY_NAME.tar.gz
       - name: Compile RooFit
