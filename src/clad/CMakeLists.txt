@@ -1,11 +1,11 @@
 # Builds RooFit's builtin clad from the copy of the clad repository in clad/,
 # and libRooFitClad, the library through which RooFit uses it.
 #
-# The copy in clad/ is kept identical to the clad repository, so that it can be
-# synced by copying the directory over, and so that clad developments made here
-# can be applied upstream as they are. The only difference is the opt-in
-# CLAD_BUILT_STANDALONE in clad/CMakeLists.txt, which lets a host project embed
-# clad with add_subdirectory(). Everything else in clad/ is used as it is: clad
+# The copy in clad/ is kept identical to the clad repository, so that clad
+# developments made here can be applied upstream as they are. It differs only
+# by the changes listed in the README that are not upstream yet, among them the
+# opt-in CLAD_BUILT_STANDALONE in clad/CMakeLists.txt, which lets a host project
+# embed clad with add_subdirectory(). Everything else in clad/ is used as it is: clad
 # is configured as a standalone project against the LLVM and Clang found via
 # LLVM_DIR and Clang_DIR, and its targets (the clad.so plugin, cladDifferentiator,
 # clad-tblgen) are part of this build, so edits in clad/ compile on

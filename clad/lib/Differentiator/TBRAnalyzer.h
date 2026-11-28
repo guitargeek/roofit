@@ -8,6 +8,7 @@
 #include "clang/Analysis/CFG.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h" // IWYU pragma: keep -- function_ref on LLVM<14
 
 #include "AnalysisBase.h"
 #include "clad/Differentiator/CladUtils.h"
@@ -53,6 +54,9 @@ class TBRAnalyzer : public clang::RecursiveASTVisitor<TBRAnalyzer>,
   /// Stores the number of performed passes for a given CFG block index.
   std::vector<short> m_BlockPassCounter;
 
+  /// Whether the function calls itself, found by the last pass.
+  bool m_CallsItself = false;
+
   //// Setters
   /// Marks S if it is required to store.
   /// E could be DeclRefExpr, ArraySubscriptExpr, MemberExpr, or DeclStmt.
@@ -61,7 +65,20 @@ class TBRAnalyzer : public clang::RecursiveASTVisitor<TBRAnalyzer>,
   /// required/not required. For isReq==true, checks if the current mode is
   /// markingMode and nonLinearMode. E could be DeclRefExpr,
   /// ArraySubscriptExpr or MemberExpr.
+  /// Records every pointer or reference parameter as modified.
+  void markAllMemoryParamsModified();
+  /// Records that the function writes PVD, unless its caller cannot see the
+  /// write. A null PVD stands for the object or a target not known.
+  void markParamModified(const clang::ParmVarDecl* PVD);
   void setIsRequired(const clang::Expr* E, bool isReq = true);
+  /// Runs \p Traverse as a branch of the current block, which may or may not
+  /// be taken. \returns what the branch changed, kept apart from the block
+  /// for the caller to merge.
+  std::unique_ptr<VarsData> traverseBranch(llvm::function_ref<void()> Traverse);
+  /// Whether \p S sits in a loop the request checkpoints, or in a loop inside
+  /// one. The reverse sweep runs the body of such a loop again, so it reads
+  /// every value the body reads, not only those an adjoint needs.
+  bool isInCheckpointedLoop(const clang::Stmt* S) const;
 
   //// Modes Setters
   /// Sets the mode manually
@@ -99,6 +116,8 @@ public:
 
   /// Visitors
   void Analyze(const DiffRequest& request);
+  /// One pass of the analysis over the body of the function of \p request.
+  void AnalyzeOnce(const DiffRequest& request);
 
   void VisitCFGBlock(const clang::CFGBlock& block);
 

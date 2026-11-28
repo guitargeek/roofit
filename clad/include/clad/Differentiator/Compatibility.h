@@ -12,16 +12,20 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/QualTypeNames.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/TypeLoc.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Basic/Version.h"
 #include "clang/Sema/DeclSpec.h"
+
 #include "clang/Sema/Ownership.h"
 #include "clang/Sema/Sema.h"
+#include "llvm/Support/Casting.h"
 #if CLANG_VERSION_MAJOR > 18
 #include "clang/Sema/SemaOpenMP.h"
 #endif
@@ -184,6 +188,24 @@ inline bool isElaboratedType(clang::QualType QT) {
   return QT->getAs<clang::ElaboratedType>() != nullptr;
 }
 
+// Called on each sugar node of a spelling, outermost first: the declaration
+// a typedef, using or tag type names, or null. Pre-22 the qualifier a name is
+// written with is on the ElaboratedType around it, which sets Unqualified; a
+// name without one -- every name before clang 16, a canonical tag since --
+// prints with its full scope.
+inline const clang::NamedDecl* getSpelledName(const clang::Type* T,
+                                              bool& Unqualified) {
+  if (const auto* ET = llvm::dyn_cast<clang::ElaboratedType>(T))
+    Unqualified = !ET->getQualifier();
+  if (const auto* TT = llvm::dyn_cast<clang::TypedefType>(T))
+    return TT->getDecl();
+  if (const auto* UT = llvm::dyn_cast<clang::UsingType>(T))
+    return UT->getFoundDecl();
+  if (const auto* TT = llvm::dyn_cast<clang::TagType>(T))
+    return TT->getDecl();
+  return nullptr;
+}
+
 // Pre-22 getPrefix() worked uniformly on any NNS kind.
 inline bool hasNNSPrefix(clang::NestedNameSpecifier* NS) {
   return NS && NS->getPrefix() != nullptr;
@@ -208,6 +230,11 @@ inline clang::QualType getRecordType(clang::ASTContext& C,
 inline clang::QualType getCanonicalTagType(clang::ASTContext& /*C*/,
                                            const clang::TagDecl* TD) {
   return TD->getTypeForDecl()->getCanonicalTypeInternal();
+}
+
+inline bool hasSameUnqualifiedType(const clang::ASTContext& C,
+                                   clang::QualType T1, clang::QualType T2) {
+  return C.hasSameUnqualifiedType(T1, T2);
 }
 
 inline clang::QualType
@@ -238,6 +265,26 @@ inline bool isElaboratedType(clang::QualType QT) {
     return TT->getKeyword() != clang::ElaboratedTypeKeyword::None ||
            bool(TT->getQualifier());
   return false;
+}
+
+// Clang 22: the qualifier a name is written with is on its type. A
+// canonical tag type prints with its full scope.
+inline const clang::NamedDecl* getSpelledName(const clang::Type* T,
+                                              bool& Unqualified) {
+  if (const auto* TT = llvm::dyn_cast<clang::TypedefType>(T)) {
+    Unqualified = !hasQualifier(TT->getQualifier());
+    return TT->getDecl();
+  }
+  if (const auto* UT = llvm::dyn_cast<clang::UsingType>(T)) {
+    Unqualified = !hasQualifier(UT->getQualifier());
+    return UT->getDecl();
+  }
+  if (const auto* TT = llvm::dyn_cast<clang::TagType>(T)) {
+    Unqualified =
+        !hasQualifier(TT->getQualifier()) && !TT->isCanonicalUnqualified();
+    return TT->getDecl();
+  }
+  return nullptr;
 }
 
 // Clang 22: only Namespace-kind NNS exposes a prefix; other kinds
@@ -303,6 +350,12 @@ inline clang::QualType getCanonicalTagType(clang::ASTContext& C,
   return C.getCanonicalTagType(TD);
 }
 
+// Clang 22 made this type comparison a static member.
+inline bool hasSameUnqualifiedType(const clang::ASTContext& /*C*/,
+                                   clang::QualType T1, clang::QualType T2) {
+  return clang::ASTContext::hasSameUnqualifiedType(T1, T2);
+}
+
 // Clang 22: CheckTemplateIdType gained Keyword + Scope* +
 // ForNestedNameSpecifier params; default them to match pre-22 behavior.
 inline clang::QualType
@@ -355,6 +408,40 @@ inline clang::QualType getTypeDeclType(clang::ASTContext& C,
 #else
   return C.getTypeDeclType(clang::ElaboratedTypeKeyword::None, std::nullopt,
                            TD);
+#endif
+}
+
+// The argument the default of \p Param gives, after the arguments
+// \p Converted of the parameters before it; null if it has none. Clang 16
+// split the converted arguments into sugared and canonical ones; clang 22
+// added the location of the template keyword.
+inline clang::TemplateArgumentLoc SubstDefaultTemplateArgument(
+    clang::Sema& S, clang::TemplateDecl* TD, clang::NamedDecl* Param,
+    llvm::ArrayRef<clang::TemplateArgument> Converted) {
+  clang::SourceLocation Loc = TD->getLocation();
+  bool HasDefault = false;
+#if CLANG_VERSION_MAJOR < 16
+  llvm::SmallVector<clang::TemplateArgument, 4> C(Converted.begin(),
+                                                  Converted.end());
+  return S.SubstDefaultTemplateArgumentIfAvailable(TD, Loc, Loc, Param, C,
+                                                   HasDefault);
+#elif CLANG_VERSION_MAJOR < 22
+  return S.SubstDefaultTemplateArgumentIfAvailable(
+      TD, Loc, Loc, Param, Converted, Converted, HasDefault);
+#else
+  return S.SubstDefaultTemplateArgumentIfAvailable(
+      TD, /*TemplateKWLoc=*/clang::SourceLocation(), Loc, Loc, Param, Converted,
+      Converted, HasDefault);
+#endif
+}
+
+// Clang 16 moved isPromotableIntegerType from Type to ASTContext.
+inline bool isPromotableIntegerType(const clang::ASTContext& C,
+                                    clang::QualType T) {
+#if CLANG_VERSION_MAJOR < 16
+  return T->isPromotableIntegerType();
+#else
+  return C.isPromotableIntegerType(T);
 #endif
 }
 
@@ -770,6 +857,57 @@ static inline const DeclSpec& Sema_ActOnStartOfLambdaDefinition_ScopeOrDeclSpec(
 #else
 #define CLAD_COMPAT_TemplateSuccess Sema::TDK_Success
 #endif
+
+// Clang 15 added isDirectlyAddressable, for builtins in namespace std; before
+// it, the predefined library functions are the ones whose address can be
+// taken.
+static inline bool isDirectlyAddressable(const clang::Builtin::Context& BI,
+                                         unsigned ID) {
+#if CLANG_VERSION_MAJOR >= 15
+  return BI.isDirectlyAddressable(ID);
+#else
+  return BI.isPredefinedLibFunction(ID);
+#endif
+}
+
+// A deduced type is qualified as what it was deduced as: qualifying `auto`
+// deduced as an alias takes the scope of the type the alias names. Clang 22's
+// TypeName::getFullyQualifiedType also asserts on a type that stands for a
+// class without being one, such as a decltype or a deduced type, which before
+// it qualified as the class: take those apart first.
+static inline clang::QualType getFullyQualifiedType(clang::ASTContext& C,
+                                                    clang::QualType T) {
+  clang::Qualifiers Quals = T.getLocalQualifiers();
+  const clang::Type* TP = T.getTypePtr();
+  if (const auto* PT = llvm::dyn_cast<clang::PointerType>(TP))
+    return C.getQualifiedType(
+        C.getPointerType(getFullyQualifiedType(C, PT->getPointeeType())),
+        Quals);
+  if (const auto* RT = llvm::dyn_cast<clang::ReferenceType>(TP)) {
+    clang::QualType P = getFullyQualifiedType(C, RT->getPointeeTypeAsWritten());
+    return C.getQualifiedType(llvm::isa<clang::LValueReferenceType>(RT)
+                                  ? C.getLValueReferenceType(P)
+                                  : C.getRValueReferenceType(P),
+                              Quals);
+  }
+  if (const auto* DT = llvm::dyn_cast<clang::DeducedType>(TP))
+    if (DT->isDeduced())
+      return getFullyQualifiedType(
+          C, C.getQualifiedType(DT->getDeducedType(), Quals));
+#if CLANG_VERSION_MAJOR >= 22
+  if (const auto* ST = llvm::dyn_cast<clang::SubstTemplateTypeParmType>(TP))
+    return getFullyQualifiedType(
+        C, C.getQualifiedType(ST->getReplacementType(), Quals));
+  // A decltype stays as written, the only spelling of an unnamed class.
+  if (!llvm::isa<clang::TypedefType, clang::TagType,
+                 clang::TemplateSpecializationType, clang::UsingType,
+                 clang::AttributedType, clang::MemberPointerType>(TP) &&
+      TP->getAsCXXRecordDecl())
+    return T;
+#endif
+  return clang::TypeName::getFullyQualifiedType(T, C,
+                                                /*WithGlobalNsPrefix=*/false);
+}
 
 } // namespace clad_compat
 #endif //CLAD_COMPATIBILITY

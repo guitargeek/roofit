@@ -44,6 +44,10 @@ class VariedAnalyzer : public clang::RecursiveASTVisitor<VariedAnalyzer>,
   /// The alias targets are the ones TraverseDeclStmt recorded in the REF_TYPE
   /// dependency set, followed transitively for a pointer bound to a pointer.
   void addVariedDeclWithAliases(const clang::VarDecl* VD);
+  /// The arrays and pointers a record that holds pointers was initialized
+  /// from, whose elements writing through its fields writes.
+  std::map<const clang::VarDecl*, std::set<const clang::VarDecl*>>
+      m_ReachedThrough;
   void AnalyzeCFGBlock(const clang::CFGBlock& block);
   void TraverseAllStmtInsideBlock(const clang::CFGBlock& block);
 
@@ -64,8 +68,11 @@ public:
 
   /// Runs Varied analysis on the function this analyser was built for.
   void Analyze();
+  bool TraverseCXXDefaultArgExpr(clang::CXXDefaultArgExpr* E);
+  bool TraverseCXXDefaultInitExpr(clang::CXXDefaultInitExpr* E);
   bool TraverseBinaryOperator(clang::BinaryOperator* BinOp);
   bool TraverseCallExpr(clang::CallExpr* CE);
+  bool TraverseCUDAKernelCallExpr(clang::CUDAKernelCallExpr* KCE);
   bool TraverseConditionalOperator(clang::ConditionalOperator* CO);
   bool TraverseDeclRefExpr(clang::DeclRefExpr* DRE);
   bool TraverseDeclStmt(clang::DeclStmt* DS);

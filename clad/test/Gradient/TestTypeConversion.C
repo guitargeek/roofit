@@ -20,7 +20,7 @@ void fn_type_conversion_grad(float z, int a, float *_d_z, int *_d_a);
 // CHECK-NEXT:     int _d_i = 0;
 // CHECK-NEXT:     int i = 0;
 // CHECK-NEXT:     clad::tape<float> _t1 = {};
-// CHECK-NEXT:     unsigned {{int|long|long long}} _t0;
+// CHECK-NEXT:     unsigned int _t0;
 // CHECK-NEXT:     for (i = 1; i < a; i++) {
 // CHECK-NEXT:         clad::push(_t1, z);
 // CHECK-NEXT:         z = z * a;
@@ -37,6 +37,20 @@ void fn_type_conversion_grad(float z, int a, float *_d_z, int *_d_a);
 // CHECK-NEXT:     }
 // CHECK-NEXT: }
 
+enum class Scale { Two = 2 };
+
+// The adjoint of an enumeration is initialized through the same cast.
+float fn_enum_cast(float z, int a) {
+  Scale s = Scale(2);
+  return z * (int)s;
+}
+
+// CHECK: void fn_enum_cast_grad(float z, int a, float *_d_z, int *_d_a) {
+// CHECK-NEXT:     Scale _d_s = Scale(0);
+// CHECK-NEXT:     Scale s = Scale(2);
+// CHECK-NEXT:     *_d_z += 1 * (int)s;
+// CHECK-NEXT: }
+
 #define TEST(F, x, y)                                                 \
   {                                                                   \
     result_0 = 0;                                                     \
@@ -51,4 +65,6 @@ int main() {
   int result_1;
   INIT_GRADIENT(fn_type_conversion);
   TEST_GRADIENT(fn_type_conversion, /*numOfDerivativeArgs=*/2, 4, 3, &result_0, &result_1); // CHECK-EXEC: {9.00, 24}
+  INIT_GRADIENT(fn_enum_cast);
+  TEST_GRADIENT(fn_enum_cast, /*numOfDerivativeArgs=*/2, 4, 3, &result_0, &result_1); // CHECK-EXEC: {2.00, 0}
 }

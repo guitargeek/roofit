@@ -44,6 +44,7 @@ llvm_add_library(cladDifferentiator
   ActivityAnalyzer.cpp
   AnalysisBase.cpp
   BaseForwardModeVisitor.cpp
+  BaseForwardModeVisitorLambda.cpp
   BaseForwardModeVisitorOpenMP.cpp
   CladUtils.cpp
   ConstantFolder.cpp
@@ -51,6 +52,7 @@ llvm_add_library(cladDifferentiator
   DerivedFnCollector.cpp
   DerivedFnInfo.cpp
   DiffPlanner.cpp
+  PerfAdvisor.cpp
   ErrorEstimator.cpp
   DerivativePrinter.cpp
   GeneratedCode.cpp
@@ -62,6 +64,7 @@ llvm_add_library(cladDifferentiator
   ReverseModeForwPassVisitor.cpp
   ReverseModeVisitor.cpp
   ReverseModeVisitorEnzyme.cpp
+  ReverseModeVisitorLambda.cpp
   ReverseModeVisitorOpenMP.cpp
   TBRAnalyzer.cpp
   Timers.cpp
@@ -71,6 +74,8 @@ llvm_add_library(cladDifferentiator
   VectorPushForwardModeVisitor.cpp
   Version.cpp
   VisitorBase.cpp
+  VisitorBaseLambda.cpp
+  LivenessAnalyzer.cpp
   LoopAnalyzer.cpp
   ${version_inc}
   )

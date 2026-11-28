@@ -10,8 +10,10 @@
 
 #include "Compatibility.h"
 
+#include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/Stmt.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Version.h"
 #include "clang/Sema/Scope.h"
@@ -104,6 +106,7 @@ namespace utils {
     DECLARE_CLONE_FN(ImplicitValueInitExpr)
     DECLARE_CLONE_FN(ExtVectorElementExpr)
     DECLARE_CLONE_FN(UnaryExprOrTypeTraitExpr)
+    DECLARE_CLONE_FN(TypeTraitExpr)
     DECLARE_CLONE_FN(CallExpr)
     DECLARE_CLONE_FN(CUDAKernelCallExpr)
     DECLARE_CLONE_FN(ShuffleVectorExpr)
@@ -130,9 +133,15 @@ namespace utils {
     DECLARE_CLONE_FN(MSPropertyRefExpr)
     DECLARE_CLONE_FN(SubstNonTypeTemplateParmExpr)
     DECLARE_CLONE_FN(CXXScalarValueInitExpr)
+    DECLARE_CLONE_FN(CXXNewExpr)
     DECLARE_CLONE_FN(ConstantExpr)
-    DECLARE_CLONE_FN(ValueStmt)
     DECLARE_CLONE_FN(LambdaExpr)
+    DECLARE_CLONE_FN(BinaryConditionalOperator)
+    DECLARE_CLONE_FN(AttributedStmt)
+    DECLARE_CLONE_FN(CXXInheritedCtorInitExpr)
+#if CLANG_VERSION_MAJOR >= 16
+    DECLARE_CLONE_FN(CXXParenListInitExpr)
+#endif // CLANG_VERSION_MAJOR >= 16
 
     clang::Stmt* VisitStmt(clang::Stmt*);
   };

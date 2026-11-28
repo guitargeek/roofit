@@ -180,11 +180,13 @@ this builtin clad, so that RooFit and clad can be developed together. Configure
 with `-Dbuiltin_clad=OFF` to use the clad inside the ROOT installation instead,
 which then has to be a ROOT built with clad.
 
-`clad/` is a copy of the clad repository and is kept identical to it, so that
-syncing is a plain copy of the directory and changes made here apply to clad
-as they are. All of clad's targets, the `clad.so` plugin, `cladDifferentiator`
-and `clad-tblgen`, are part of this build, so edits anywhere in `clad/` compile
-on `cmake --build`. Until they are upstream, the copy carries two changes that
+`clad/` is a copy of the clad repository (currently of clad master at
+`bf3209e3`) and is kept identical to it apart from the changes listed below,
+so that changes made here apply to clad as they are. Syncing replaces the
+directory with a newer clad while keeping these changes, as a 3-way merge. All
+of clad's targets, the `clad.so` plugin, `cladDifferentiator` and
+`clad-tblgen`, are part of this build, so edits anywhere in `clad/` compile on
+`cmake --build`. Until they are upstream, the copy carries these changes that
 this integration needed:
 
 * `clad/CMakeLists.txt`: the `CLAD_BUILT_STANDALONE` opt-in, which lets a
@@ -194,6 +196,18 @@ this integration needed:
   locations were compared by raw source offset instead of in translation unit
   order. That broke `RooFit::Detail::MathFuncs::constraintSum()` as soon as
   the generated code lived in a file of its own.
+* `clad/lib/Differentiator/TBRAnalyzer.cpp`: the reverse sweep of a
+  checkpointed loop did not step its index back when the index was only a
+  factor of a value through which no derivative flows, like `eps * i`. Every
+  recomputed iteration then read the index the loop ended with, and the
+  gradients of RooFit's numeric integrals came out wrong without a
+  diagnostic. Test: `clad/test/Regressions/checkpoint-loop-index-factor.cpp`.
+* `clad/lib/Differentiator/DiffPlanner.cpp`: a custom pullback of a
+  single-argument function, which reverse mode differentiates through its
+  pushforward, was reported as having a wrong signature, a hard error, instead
+  of as unused. Since hessians plan their reverse passes like gradients, this
+  hit `RooFit::Detail::MathFuncs::expm1OverX_pullback()`. Test: in
+  `clad/test/Diagnostics/CustomDerivativeDiagnostics.C`.
 
 ### Why the builtin clad does not run inside the interpreter
 

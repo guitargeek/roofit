@@ -144,6 +144,22 @@ double f4(double x) {
   return mypow(x); // expected-warning {{unused function 'mypow_pullback';}}
 }
 
+// The pullback as a user writes it, with the adjoint of the argument, is as
+// unused, and is reported as such rather than as one with a wrong signature.
+double cube(double x);
+namespace clad::custom_derivatives {
+  clad::ValueAndPushforward<double, double> cube_pushforward(double x, double d_x) {
+    return {x * x * x, 3 * x * x * d_x};
+  }
+  void cube_pullback(double x, double d_y, double* d_x) { // expected-note {{unused}}
+    assert(false && "Must not be called!");
+  }
+} // end namespace clad::custom_derivatives
+
+double f5(double x) {
+  return cube(x); // expected-warning {{unused function 'cube_pullback'; 'cube' is a real-domain, single-argument function and only pushforward is required}}
+}
+
 int main() {
     clad::gradient(f1);
     clad::differentiate(f2, "x");
@@ -153,4 +169,5 @@ int main() {
     clad::gradient(ambiguous_qualification); // expected-error@* {{call to 'ambiguous_op_pullback' is ambiguous}}
     clad::gradient(f3);
     clad::gradient(f4);
+    clad::gradient(f5);
 }

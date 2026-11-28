@@ -1,8 +1,22 @@
 #include "clad/Differentiator/Differentiator.h"
 
+namespace M {
+using Real = double;
+} // namespace M
+
 double foo(double x, double alpha, double theta, double x0 = 0) {
   return x * alpha * theta * x0;
 }
+
+inline namespace V {
+using Ratio = double;
+} // namespace V
+Ratio scale(M::Real x) { return 3 * x; }
+
+namespace M {
+template <typename T> Real cube(T x) { return x * x * x; }
+template Real cube<double>(double);
+} // namespace M
 
 namespace clad {
 namespace custom_derivatives {
@@ -26,6 +40,10 @@ float custom_fn_darg0(float x, float y) { return cos(x); }
 void custom_fn_darg0_grad(float x, float y, float* d_x, float* d_y) {
   *d_x -= sin(x);
 }
+
+double cube_fn_darg0(double x) { return 3 * x * x; }
+
+void cube_fn_darg0_grad(double x, double* d_x) { *d_x += 6 * x; }
 
 } // namespace custom_derivatives
 } // namespace clad

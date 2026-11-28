@@ -7,6 +7,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/OperationKinds.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/Type.h"
@@ -19,6 +20,7 @@
 #include <cstddef>
 #include <memory>
 #include <set>
+#include <utility>
 
 using namespace clang;
 
@@ -71,6 +73,18 @@ void VariedAnalyzer::Analyze() {
     CFGBlock& nextBlock = *getCFGBlockByID(m_AnalysisDC, m_CurBlockID);
     AnalyzeCFGBlock(nextBlock);
   }
+}
+
+bool VariedAnalyzer::TraverseCXXDefaultArgExpr(CXXDefaultArgExpr* E) {
+  // RecursiveASTVisitor skips the underlying default expression unless
+  // shouldVisitImplicitCode() is enabled.
+  return TraverseStmt(E->getExpr());
+}
+
+bool VariedAnalyzer::TraverseCXXDefaultInitExpr(CXXDefaultInitExpr* E) {
+  // RecursiveASTVisitor skips the underlying default initializer unless
+  // shouldVisitImplicitCode() is enabled.
+  return TraverseStmt(E->getExpr());
 }
 
 void VariedAnalyzer::TraverseAllStmtInsideBlock(const CFGBlock& block) {
@@ -127,6 +141,11 @@ void VariedAnalyzer::addVariedDeclWithAliases(const VarDecl* VD) {
     // setIsRequired already walks a REF_TYPE's targets to set their varied
     // bit; this walks the same edges to reach the request's varied-decl set,
     // which is what decides whether a declaration is given an adjoint.
+    auto Reached = m_ReachedThrough.find(cur);
+    if (Reached != m_ReachedThrough.end())
+      for (const VarDecl* target : Reached->second)
+        if (seen.insert(target).second)
+          worklist.push_back(target);
     const VarData* data = getVarDataFromDecl(cur);
     if (data && data->m_Type == VarData::REF_TYPE)
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-union-access)
@@ -173,6 +192,25 @@ bool VariedAnalyzer::TraverseBinaryOperator(BinaryOperator* BinOp) {
     m_Marking = true;
     TraverseStmt(L);
     m_Marking = false;
+    // `p = a` and `b.p = a` make p and b reach a, as an initializer does:
+    // writing through them then writes a. What they reached before, they
+    // may still.
+    const Expr* Root = L->IgnoreParenImpCasts();
+    while (const auto* ME = dyn_cast<MemberExpr>(Root))
+      Root = ME->getBase()->IgnoreParenImpCasts();
+    const auto* RootRef = dyn_cast<DeclRefExpr>(Root);
+    const auto* RootVD =
+        RootRef ? dyn_cast<VarDecl>(RootRef->getDecl()) : nullptr;
+    QualType LTy = L->getType();
+    if (opCode == BO_Assign && RootVD &&
+        (LTy->isPointerType() || LTy->isArrayType())) {
+      std::set<const VarDecl*> Named;
+      getDependencySet(R, Named);
+      for (const VarDecl* N : Named)
+        if (N && N != RootVD &&
+            (N->getType()->isArrayType() || N->getType()->isPointerType()))
+          m_ReachedThrough[RootVD].insert(N);
+    }
   } else if (opCode == BO_Add || opCode == BO_Sub || opCode == BO_Mul ||
              opCode == BO_Div) {
     TraverseStmt(L);
@@ -232,9 +270,12 @@ bool VariedAnalyzer::TraverseCXXOperatorCallExpr(
   return false;
 }
 
+bool VariedAnalyzer::TraverseCUDAKernelCallExpr(CUDAKernelCallExpr* KCE) {
+  return TraverseCallExpr(KCE);
+}
+
 bool VariedAnalyzer::TraverseCallExpr(CallExpr* CE) {
-  Expr* callee = CE->getCallee();
-  if (isa<CXXPseudoDestructorExpr>(callee))
+  if (utils::isNoOpDestructorCall(CE))
     return false;
 
   bool variedBefore = m_Varied;
@@ -309,15 +350,34 @@ bool VariedAnalyzer::TraverseDeclStmt(DeclStmt* DS) {
 
         auto* VDExpr = &getCurBlockVarsData()[VD];
         QualType VDType = VD->getType();
+        // `Buf b{s}` keeps a pointer to s in b: writing through b.p writes s.
+        if (VDType->isRecordType() &&
+            !utils::reachesNoOtherMemory(m_AnalysisDC->getASTContext(),
+                                         VDType)) {
+          std::set<const VarDecl*> Named;
+          getDependencySet(init, Named);
+          for (const VarDecl* N : Named)
+            if (N &&
+                (N->getType()->isArrayType() || N->getType()->isPointerType()))
+              m_ReachedThrough[VD].insert(N);
+        }
         // if the declared variable is ref type attach its VarData to the
         // VarData of the RHS variable.
         if (VDExpr->m_Type == VarData::REF_TYPE || VDType->isPointerType()) {
           init = init->IgnoreParenCasts();
-          // addVar already gave a reference-typed VDExpr an (empty) REF set;
-          // resetAsRef frees it before installing a fresh one rather than
-          // placement-new'ing over the live member and leaking it.
-          VDExpr->resetAsRef();
-          getDependencySet(init, *VDExpr->m_Val.m_RefData);
+          std::set<const VarDecl*> Targets;
+          getDependencySet(init, Targets);
+          // A pointer to storage no variable names, such as `new T[2]`, is
+          // all there is of it: it keeps its own bit, which an alias of
+          // nothing would drop.
+          if (VDExpr->m_Type == VarData::REF_TYPE || !Targets.empty()) {
+            // addVar already gave a reference-typed VDExpr an (empty) REF
+            // set; resetAsRef frees it before installing a fresh one rather
+            // than placement-new'ing over the live member and leaking it.
+            VDExpr->resetAsRef();
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-union-access)
+            *VDExpr->m_Val.m_RefData = std::move(Targets);
+          }
         }
       }
     }
@@ -468,6 +528,17 @@ bool VariedAnalyzer::TraverseDeclRefExpr(DeclRefExpr* DRE) {
   if (VarData* data = getVarDataFromDecl(VD))
     if (findReq(*data))
       m_Varied = true;
+  // A read through it reads what it reaches, `b.p[0]` the s of `Buf b{s}`,
+  // and its adjoint is how the derivative gets back there.
+  auto Reached = m_ReachedThrough.find(VD);
+  if (Reached != m_ReachedThrough.end())
+    for (const VarDecl* Target : Reached->second) {
+      VarData* data = getVarDataFromDecl(Target);
+      if (data && findReq(*data)) {
+        m_Varied = true;
+        m_DiffReq.addVariedDecl(VD);
+      }
+    }
   return false;
 }
 } // namespace clad

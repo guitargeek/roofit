@@ -1,5 +1,6 @@
 // RUN: %cladclang %s -I%S/../../include -oLambdas.out 2>&1 | %filecheck %s
 // RUN: ./Lambdas.out | %filecheck_exec %s
+// UNSUPPORTED: clang-11, clang-12, clang-13, clang-14, clang-15, clang-16
 
 #include "clad/Differentiator/Differentiator.h"
 
@@ -52,6 +53,100 @@ double fn5(double x) {
     return _f(x);
 }
 
+double fn6(double x) {
+    double c = 5.0;
+    auto _f = [c](double t) { return t * c; };
+    return _f(x);
+}
+
+double fn7(double x) {
+    double c = 2.0;
+    auto _f = [c](double t) { return t * t * c; };
+    return _f(x);
+}
+
+double fn8(double x) {
+    double d = 4.0;
+    auto _f = [&d](double t) { return t * d; };
+    return _f(x);
+}
+
+double fn9(double x) {
+    double a = 3.0, b = 7.0;
+    auto _f = [a, b](double t) { return a * t + b; };
+    return _f(x);
+}
+
+double fn10(double x) {
+    double c = 2.0;
+    auto _f = [c](double t) { return t * c; };
+    c = 100.0;
+    return _f(x);
+}
+
+double fn11(double x) {
+    double c = x * x;
+    auto _f = [c](double) { return c; };
+    return _f(x);
+}
+
+double fn12(double x) {
+    double c = 2.0;
+    auto _f = [c](double t) {
+        double s = 0;
+        for (int k = 0; k < 3; ++k)
+            s += t * c;
+        return s;
+    };
+    return _f(x);
+}
+
+// c is captured twice, with a different value each time.
+double fn13(double i, double j) {
+  double c = i;
+  auto f = [c](double t) { return c * t; };
+  c = 2 * i;
+  auto g = [c](double t) { return c * t; };
+  return f(j) + g(j);
+}
+
+// A lambda passed to a function template: the template is called with a
+// closure that runs the lambda's body and its derivative.
+template <class F> void each(int n, const F& f) {
+    for (int i = 0; i < n; ++i)
+        f(i);
+}
+
+double fn14(double x) {
+    double s = 1;
+    each(3, [&](int i) { s *= x + i; });
+    return s;
+}
+
+// CHECK: double fn14_darg0(double x) {
+// CHECK-NEXT:     double _d_x = 1;
+// CHECK-NEXT:     double _d_s = 0;
+// CHECK-NEXT:     double s = 1;
+// CHECK-NEXT:     each(3, [&](int i) {
+// CHECK-NEXT:         double _t0 = _d_x + 0;
+// CHECK-NEXT:         double _t1 = x + i;
+// CHECK-NEXT:         _d_s = _d_s * _t1 + s * _t0;
+// CHECK-NEXT:         s *= _t1;
+// CHECK-NEXT:     });
+// CHECK-NEXT:     return _d_s;
+// CHECK-NEXT: }
+
+// So is it in vector mode: the template needs no derivative.
+double fn15(double x, double y) {
+    double s = 0;
+    each(3, [&](int i) { s += x * y * i; });
+    return s;
+}
+
+// CHECK-NOT: each_vector_pushforward
+// CHECK: void fn15_dvec(double x, double y, double *_d_x, double *_d_y) {
+// CHECK: each(3, [&](int i) {
+
 int main() {
     auto fn0_dx = clad::differentiate(fn0, 0);
     printf("Result is = %.2f\n", fn0_dx.execute(7)); // CHECK-EXEC: Result is = 14.00
@@ -76,4 +171,36 @@ int main() {
     auto fn5_dx = clad::differentiate(fn5, 0);
     printf("Result is = %.2f\n", fn5_dx.execute(7)); // CHECK-EXEC: Result is = 42.00
     printf("Result is = %.2f\n", fn5_dx.execute(-1)); // CHECK-EXEC: Result is = -6.00
+
+    auto fn6_dx = clad::differentiate(fn6, 0);
+    printf("Result is = %.2f\n", fn6_dx.execute(3)); // CHECK-EXEC: Result is = 5.00
+
+    auto fn7_dx = clad::differentiate(fn7, 0);
+    printf("Result is = %.2f\n", fn7_dx.execute(3)); // CHECK-EXEC: Result is = 12.00
+
+    auto fn8_dx = clad::differentiate(fn8, 0);
+    printf("Result is = %.2f\n", fn8_dx.execute(3)); // CHECK-EXEC: Result is = 4.00
+
+    auto fn9_dx = clad::differentiate(fn9, 0);
+    printf("Result is = %.2f\n", fn9_dx.execute(3)); // CHECK-EXEC: Result is = 3.00
+
+    auto fn10_dx = clad::differentiate(fn10, 0);
+    printf("Result is = %.2f\n", fn10_dx.execute(3)); // CHECK-EXEC: Result is = 2.00
+
+    auto fn11_dx = clad::differentiate(fn11, 0);
+    printf("Result is = %.2f\n", fn11_dx.execute(3)); // CHECK-EXEC: Result is = 6.00
+
+    auto fn12_dx = clad::differentiate(fn12, 0);
+    printf("Result is = %.2f\n", fn12_dx.execute(2)); // CHECK-EXEC: Result is = 6.00
+
+    auto fn13_dx = clad::differentiate(fn13, 0);
+    printf("Result is = %.2f\n", fn13_dx.execute(2, 3)); // CHECK-EXEC: Result is = 9.00
+
+    auto fn14_dx = clad::differentiate(fn14, 0);
+    printf("Result is = %.2f\n", fn14_dx.execute(2)); // CHECK-EXEC: Result is = 26.00
+
+    auto fn15_dvec = clad::differentiate<clad::opts::vector_mode>(fn15, "x,y");
+    double dx = 0, dy = 0;
+    fn15_dvec.execute(2, 5, &dx, &dy);
+    printf("Result is = {%.2f, %.2f}\n", dx, dy); // CHECK-EXEC: Result is = {15.00, 6.00}
 }

@@ -161,13 +161,14 @@ jobs:
           - { name: ubu24-clang20-runtime23, os: ubuntu-24.04, compiler: clang-20, clang-runtime: '23', use-recipe: 'true' }
           - { name: ubu24-clang22-runtime23-asan, os: ubuntu-24.04, compiler: clang-22, clang-runtime: '23', flavor: asan, extra_cmake_options: '-DLLVM_USE_SANITIZER=Address' }
           # --- MACOS: Last 5 Runtimes (19-23) ---
-          # macOS ARM (standard) throughout; the oldest runtime runs on Intel
-          # for x86 sanity. brew has llvm@19 through llvm@22 but no llvm@23,
-          # so that row takes the published llvm-release cell instead. The
-          # Intel row stays on macos-15-intel because it needs no cell; the
-          # ones that are built are for macos-26-intel.
-          - { name: osx-intel-runtime19, os: macos-15-intel, compiler: clang, clang-runtime: '19' }
-          - { name: osx-arm-runtime20, os: macos-26, compiler: clang, clang-runtime: '20' }
+          # macOS ARM (standard) throughout, with one runtime on Intel for
+          # x86 sanity. brew has llvm@19 through llvm@22 but no llvm@23, so
+          # that row takes the published llvm-release cell instead. On Intel,
+          # where Homebrew has no bottles left to upgrade to, setup-llvm uses
+          # what the image carries rather than install: llvm@20 on
+          # macos-26-intel, the newest of them.
+          - { name: osx-arm-runtime19, os: macos-26, compiler: clang, clang-runtime: '19' }
+          - { name: osx-intel-runtime20, os: macos-26-intel, compiler: clang, clang-runtime: '20' }
           - { name: osx-arm-runtime21, os: macos-26, compiler: clang, clang-runtime: '21' }
           - { name: osx-arm-runtime22, os: macos-26, compiler: clang, clang-runtime: '22' }
           - { name: osx-arm-runtime23, os: macos-26, compiler: clang, clang-runtime: '23', use-recipe: 'true' }
@@ -183,13 +184,6 @@ jobs:
           - { name: win-msvc-runtime23, os: windows-2022, compiler: msvc, clang-runtime: '23' }
 
           # --- CUSTOM: Debug, coverage, benchmarks, static analysis ---
-          - name: ubu24-clang20-runtime22-debug
-            os: ubuntu-24.04
-            compiler: clang-20
-            clang-runtime: '22'
-            debug_build: true
-            flavor: debug
-
           - name: ubu24-gcc13-runtime20-benchmarks
             os: ubuntu-24.04
             compiler: gcc-13
@@ -213,7 +207,8 @@ jobs:
             os: ubuntu-22.04
             compiler: clang-16
             clang-runtime: '22'
-            extra_packages: 'libtrilinos-kokkos-dev ninja-build'
+            kokkos: '5.1.1'
+            extra_packages: 'ninja-build'
             extra_cmake_options: '-G Ninja'
 
 
@@ -247,7 +242,8 @@ jobs:
             os: ubuntu-24.04-arm
             compiler: clang-16
             clang-runtime: '22'
-            extra_packages: 'libtrilinos-kokkos-dev ninja-build'
+            kokkos: '5.1.1'
+            extra_packages: 'ninja-build'
             extra_cmake_options: '-G Ninja'
 
           - name: ubu24-arm-clang16-runtime18
@@ -300,6 +296,19 @@ jobs:
               fi
             fi
           fi
+          # Memory runs out before CPUs do: compiling ReverseModeVisitor.cpp or
+          # CladUtils.cpp takes about 1.6 GiB. A self-hosted machine runs
+          # more than one job, so count what is free when this one starts.
+          # Two builds at -j$(nproc) on the dell had the kernel kill gcc on
+          # 2a2c524c.
+          avail_kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+          bymem=$(( avail_kb / (2 * 1024 * 1024) ))
+          if [[ "$bymem" -lt 1 ]]; then
+            bymem=1
+          fi
+          if [[ "$bymem" -lt "$ncpus" ]]; then
+            ncpus="$bymem"
+          fi
         fi
         echo "ncpus=$ncpus" >> $GITHUB_ENV
     - name: Setup LLVM ${{ matrix.clang-runtime }}${{ matrix.flavor && format(' [{0}]', matrix.flavor) || '' }}
@@ -312,6 +321,13 @@ jobs:
         # from-source llvm-release recipe); the `|| 'system'` default cannot
         # emit that empty string on its own.
         flavor:  ${{ matrix.use-recipe != 'true' && (matrix.flavor || 'system') || '' }}
+
+    - name: Setup Kokkos ${{ matrix.kokkos }}
+      if: matrix.kokkos && runner.os != 'Windows'
+      uses: compiler-research/ci-workflows/actions/setup-kokkos@main
+      with:
+        version: ${{ matrix.kokkos }}
+        os:      ${{ matrix.self-hosted-os || matrix.os }}
 
     - name: Install extra Linux deps
       if: runner.os == 'Linux'
@@ -549,7 +565,7 @@ jobs:
 
         cmake --build . -- -j${{ env.ncpus }}
     - name: Check the touched tests against the baseline
-      if: ${{ always() && runner.os != 'windows' && env.observes_check == '1' }}
+      if: ${{ !cancelled() && runner.os != 'windows' && env.observes_check == '1' }}
       uses: ./.github/actions/observes-change
       with:
         mode: check
@@ -754,6 +770,36 @@ jobs:
             use-recipe: 'true'
     steps: *build_steps
 
+  # A debug build of clad against a debug LLVM finds what assertions find --
+  # an AST clad builds that clang would never accept -- but it is the slowest
+  # Linux row by a wide margin, and almost always agrees with the release rows
+  # a pull request already waits on. So, like Valgrind, it waits for the merge
+  # and reports through post-merge-report; a pull request that touches the AST
+  # builders can still ask for it with the run-post-merge label. Step list
+  # shared via the &build_steps anchor.
+  build-debug:
+    if: ${{ github.event_name == 'push'
+        || contains(github.event.pull_request.labels.*.name,
+                    'run-post-merge') }}
+    timeout-minutes: 600
+    # A literal rather than ${{ matrix.name }}: this job is skipped on a pull
+    # request that does not ask for it, and a skipped job's name is resolved
+    # before the matrix expands, so the expression form reports as a check
+    # called `matrix.name`. Holds while the matrix has the one row below.
+    name: ubu24-clang20-runtime22-debug
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubu24-clang20-runtime22-debug
+            os: ubuntu-24.04
+            compiler: clang-20
+            clang-runtime: '22'
+            debug_build: true
+            flavor: debug
+    steps: *build_steps
+
   # ROOT ships clad linked into cling, where it runs under an interpreter
   # rather than a compiler. This job builds that pairing and runs the tests
   # that need it. Like Valgrind it waits for the merge: building cling costs a
@@ -922,7 +968,7 @@ jobs:
     # A miss is silent: the row still passes, only slowly. Say what happened
     # so a configure that stops matching the producer is visible.
     - name: Report what the cache did
-      if: always()
+      if: ${{ !cancelled() }}
       run: ccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY"
 
   # clad standalone against an LLVM build tree with a multi-config generator,
@@ -980,7 +1026,7 @@ jobs:
           --target clad-tblgen clad-tables
 
   post-merge-report:
-    needs: [build-valgrind, build-cling]
+    needs: [build-valgrind, build-debug, build-cling]
     # Only after a merge, even though the gates above now also run on a
     # labelled pull request: this reports against head_commit, which a pull
     # request event does not carry, and the author of a branch watching its
@@ -994,12 +1040,14 @@ jobs:
       uses: actions/github-script@v9
       with:
         script: |
-          // A row of its own for each gate, so that a red Valgrind and a red
-          // cling are two threads rather than one confusing one. Reporting
+          // A row of its own for each gate, so that a red Valgrind, debug build
+          // and cling are separate threads rather than one confusing one. Reporting
           // is per label from here on; a job that ran and passed is skipped.
           const gates = [
             { label: 'valgrind', what: 'Valgrind',
               result: '${{ needs.build-valgrind.result }}' },
+            { label: 'debug-build', what: 'The debug build',
+              result: '${{ needs.build-debug.result }}' },
             { label: 'cling', what: 'Clad inside cling',
               result: '${{ needs.build-cling.result }}' },
           ];
@@ -1044,6 +1092,28 @@ jobs:
               });
           }
 
+  # Auto-merge waits only for the checks that are required, and the rows of
+  # the matrix cannot be: their names change with the matrix. #2515 merged
+  # with six rows red. This job is the one check that stands for all of them;
+  # make `Builds pass` required instead of naming rows. A row that was
+  # skipped -- a change to docs only, a dell that did not wake up -- does not
+  # count against it. The post-merge gates are left out: they report after
+  # the merge, through post-merge-report.
+  builds-pass:
+    name: Builds pass
+    # always(), not !cancelled(): a required check that is skipped counts as
+    # passed, so a cancelled run must still report here, and fail.
+    if: ${{ always() }}
+    needs: [build, build-selfhost, build-in-tree, build-multiconfig, build-wasm]
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Decide
+      if: ${{ contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled') }}
+      run: |
+        echo "::error::a build row failed or was cancelled"
+        exit 1
+
   observes-change:
     name: Tests observe the change
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -1072,7 +1142,7 @@ jobs:
     # is never the only one to fail across many changes is a candidate for
     # merging, which is a claim about defects caught rather than lines run.
     - name: Upload the summary record
-      if: ${{ always() }}
+      if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7
       with:
         name: observes-change-summary
@@ -1083,22 +1153,33 @@ jobs:
     needs: rebuild-needed
     if: ${{ !cancelled() && needs.rebuild-needed.outputs.value != 'false' }}
     timeout-minutes: 30
-    name: ubu24-emscr-runtime22
+    name: ubu24-emscr-runtime23
     runs-on: ubuntu-24.04
+    env:
+      EM_VERSION: 6.0.8
+      EM_CACHE_FOLDER: 'emsdk-cache'
     steps:
     - uses: actions/checkout@v7
 
-    - name: Setup emsdk
-      uses: emscripten-core/setup-emsdk@v16
+
+    - name: Setup cache
+      id: cache-system-libraries
+      uses: actions/cache@v6
       with:
-        # The emsdk pin must match the llvm-wasm cell.
-        version: '4.0.9'
+        path: ${{env.EM_CACHE_FOLDER}}
+        key: ${{env.EM_VERSION}}-${{ matrix.os }}
+
+    - uses: emscripten-core/setup-emsdk@v16
+      with:
+        version: ${{env.EM_VERSION}}
+        actions-cache-folder: ${{env.EM_CACHE_FOLDER}}
+        cache-key: ${{env.EM_VERSION}}-${{ matrix.os }}
 
     - name: Setup LLVM/Clang/LLD built for wasm
       uses: compiler-research/ci-workflows/actions/setup-recipe@main
       with:
         recipe: llvm-wasm
-        version: '22'
+        version: 23-emsdk${{env.EM_VERSION}}
         os: ubuntu-24.04
         arch: x86_64
 
@@ -1109,20 +1190,7 @@ jobs:
     # exactly this.
     - name: Build clad-tblgen for the host
       run: |
-        # Any native LLVM with a TableGen library will do, and it need not be
-        # the one clad is built against: the tool renders the same tables
-        # whichever major it was compiled with. Take whatever the image
-        # already carries rather than pinning a version that may not be there.
-        for v in 20 19 18 17 16; do
-          if [ -d "/usr/lib/llvm-$v/lib/cmake/llvm" ]; then
-            NATIVE_LLVM="/usr/lib/llvm-$v"; break
-          fi
-        done
-        if [ -z "$NATIVE_LLVM" ]; then
-          sudo apt-get update
-          sudo apt-get install -y llvm-18-dev
-          NATIVE_LLVM=/usr/lib/llvm-18
-        fi
+        export NATIVE_LLVM_BUILD_DIR="$(pwd)/install/native_build"
         echo "Rendering the tables with $NATIVE_LLVM"
         cmake -S "$GITHUB_WORKSPACE/utils/clad-tblgen" -B tblgen-native \
           -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$NATIVE_LLVM/lib/cmake/llvm"
